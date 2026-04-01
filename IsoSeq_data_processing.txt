@@ -1,0 +1,940 @@
+### The initial data pre-processing for Iso-seq data (lima (Remove cDNA primers); isoseq refine (Remove polyA tail and artificial concatemers)) \
+### was performed at the UC Davis DNA Technologies and Expression Analysis Core sequencing where library sequencing was performed
+
+### The reference genomes (.fasta) and genome annotation files (.gff3) used here are available online at: https://grapegenomics.com/
+### Grapegenomics.com: a web portal with genomic data and analysis tools for wild and cultivated grapevines, Cochetel Noé, Cantu Dario, Zenodo (2024) https://doi.org/10.5281/zenodo.10570120
+
+### The software and workflow followed here is described online at: https://isoseq.how/ and https://github.com/conesalab/SQANTI3
+
+
+
+# Step 1: create reference genomes for interspecific hybrid grapevines by merging available reference genomes for the parental species using command line arguments 
+
+
+# Combine FASTAs
+cat /rhome/wcoll010/shared/pacbio/genomes/V_riparia/VITVri588271_v1.0.fasta \
+    /rhome/wcoll010/shared/pacbio/genomes/V_rupestris/VITVrpB38_v1.0.fasta > Vrip_X_Vrup_genome.fasta
+
+# Combine GFFs while removing internal headers
+echo "##gff-version 3" > Vrip_X_Vrup.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_riparia/VITVri588271_v1.0.gff3 >> Vrip_X_Vrup.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_rupestris/VITVrpB38_v1.0.gff3 >> Vrip_X_Vrup.gff3
+
+
+# Check FASTA 
+head Vrip_X_Vrup_genome.fasta -n 5
+
+# Check GFF
+head Vrip_X_Vrup.gff3 -n 5
+
+# Check if Riparia IDs are present
+grep -c "VITVri" Vrip_X_Vrup.gff3
+
+# Check if Rupestris IDs are present
+grep -c "VITVrp" Vrip_X_Vrup.gff3
+
+# Check FASTA header
+grep ">" Vrip_X_Vrup_genome.fasta | head -n 1
+
+# Check GFF column 1
+grep -v "^#" Vrip_X_Vrup.gff3 | head -n 1 | cut -f1
+
+
+### Do the same thing for V. rupestris X V. berlandieri, V. riparia X V. berlandieri, and V. riparia X V. acerifolia
+
+# for V rup X V berl (for hybrid genotypes 99R and 1103)
+cat /rhome/wcoll010/shared/pacbio/genomes/V_berlandieri/VITVbe9031_v1.0.fasta \
+    /rhome/wcoll010/shared/pacbio/genomes/V_rupestris/VITVrpB38_v1.0.fasta > Vber_X_Vrup_genome.fasta
+
+echo "##gff-version 3" > Vber_X_Vrup.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_berlandieri/VITVbe9031_v1.0.gff3 >> Vber_X_Vrup.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_rupestris/VITVrpB38_v1.0.gff3 >> Vber_X_Vrup.gff3
+
+
+## for V rip X V berl (5BB, SO4)
+cat /rhome/wcoll010/shared/pacbio/genomes/V_riparia/VITVri588271_v1.0.fasta \
+    /rhome/wcoll010/shared/pacbio/genomes/V_berlandieri/VITVbe9031_v1.0.fasta > Vrip_X_Vber_genome.fasta
+    
+echo "##gff-version 3" > Vrip_X_Vber.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_riparia/VITVri588271_v1.0.gff3 >> Vrip_X_Vber.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_berlandieri/VITVbe9031_v1.0.gff3 >> Vrip_X_Vber.gff3
+
+
+
+## for V rip X V rup (SW (Schwarzmann), 3309, 101-14)
+cat /rhome/wcoll010/shared/pacbio/genomes/V_riparia/VITVri588271_v1.0.fasta \
+    /rhome/wcoll010/shared/pacbio/genomes/V_rupestris/VITVrpB38_v1.0.fasta > Vrip_X_Vrup_genome.fasta
+    
+echo "##gff-version 3" > Vrip_X_Vrup.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_riparia/VITVri588271_v1.0.gff3 >> Vrip_X_Vrup.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_rupestris/VITVrpB38_v1.0.gff3 >> Vrip_X_Vrup.gff3
+
+
+## for V rip X V acer (1616)
+cat /rhome/wcoll010/shared/pacbio/genomes/Vripa/VITVri588271_v1.0.fasta \
+    /rhome/wcoll010/shared/pacbio/genomes/V_acerifolia/VITVac9018_v1.0.fasta > Vrip_X_Vace_genome.fasta
+    
+echo "##gff-version 3" > Vrip_X_Vace.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/Vripa/VITVri588271_v1.0.gff3 >> Vrip_X_Vace.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_acerifolia/VITVac9018_v1.0.gff3 >> Vrip_X_Vace.gff3
+
+
+
+
+
+
+
+#####
+# start iso seq processing, following the same workflow as before (conda environemnt and scripts are already set up)
+
+### the initial data pre-processing for Iso-seq data was \
+### performed at the UC Davis The DNA Technologies and Expression Analysis Core \
+### where library prep and sequencing was performed
+### the data pre-processing steps (lima (Remove cDNA primers); isoseq refine (Remove polyA tail and artificial concatemers))
+### use the scripts and workflow we followed are described online here: https://isoseq.how/
+
+
+### write a 'manifest' file which has sample names and full file paths using nano text editor 
+
+# find the full file paths to the flnc.bam files 
+
+# SW (riparia X rupestris)
+find /rhome/wcoll010/shared/pacbio -name "sw_inf_R1_flnc-1.bam"
+find /rhome/wcoll010/shared/pacbio -name "sw_con_R1_flnc-4.bam"
+find /rhome/wcoll010/shared/pacbio -name "sw_inf_R2_flnc-4.bam"
+find /rhome/wcoll010/shared/pacbio -name "sw_con_R2_flnc-5.bam"
+find /rhome/wcoll010/shared/pacbio -name "sw_con_R3_flnc-1.bam"
+find /rhome/wcoll010/shared/pacbio -name "sw_inf_R3_flnc-4.bam"
+
+
+# 3309 (riparia X rupestris)
+find /rhome/wcoll010/shared/pacbio -name "3309_con_R1_flnc-2.bam"
+find /rhome/wcoll010/shared/pacbio -name "3309_con_R2_flnc-1.bam"
+find /rhome/wcoll010/shared/pacbio -name "3309_con_R3_flnc-5.bam"
+find /rhome/wcoll010/shared/pacbio -name "3309_inf_R1_flnc-5.bam"
+find /rhome/wcoll010/shared/pacbio -name "3309_inf_R2_flnc-5.bam"
+find /rhome/wcoll010/shared/pacbio -name "3309_inf_R3_flnc-5.bam"
+
+# 99R
+find /rhome/wcoll010/shared/pacbio -name "99r_con_R1_flnc-5.bam"
+find /rhome/wcoll010/shared/pacbio -name "99r_con_R2_flnc-1.bam"
+find /rhome/wcoll010/shared/pacbio -name "99r_con_R2_flnc-1.bam"
+find /rhome/wcoll010/shared/pacbio -name "99r_inf_R1_flnc-3.bam"
+find /rhome/wcoll010/shared/pacbio -name "99r_inf_R2_flnc-3.bam"
+find /rhome/wcoll010/shared/pacbio -name "99r_inf_R3_flnc-5.bam"
+find /rhome/wcoll010/shared/pacbio -name "99r_con_R4_flnc-5.bam"
+
+# 1103
+find /rhome/wcoll010/shared/pacbio -name "1103_inf_R1_flnc-2.bam"
+find /rhome/wcoll010/shared/pacbio -name "1103_con_R1_flnc-5.bam"
+find /rhome/wcoll010/shared/pacbio -name "1103_inf_R2_flnc-4.bam"
+find /rhome/wcoll010/shared/pacbio -name "1103_con_R2_flnc-1.bam"
+find /rhome/wcoll010/shared/pacbio -name "1103_con_R3_flnc-3.bam"
+find /rhome/wcoll010/shared/pacbio -name "1103_inf_R3_flnc-2.bam"
+find /rhome/wcoll010/shared/pacbio -name "1103_inf_R4_flnc-2.bam"
+
+
+# SO4 (riparia X berlandieri)
+find /rhome/wcoll010/shared/pacbio -name "SO4_con_R1_flnc-3.bam"
+find /rhome/wcoll010/shared/pacbio -name "SO4_con_R2_flnc-4.bam"
+find /rhome/wcoll010/shared/pacbio -name "SO4_inf_R1_flnc-5.bam"
+find /rhome/wcoll010/shared/pacbio -name "SO4_con_R3_flnc-3.bam"
+find /rhome/wcoll010/shared/pacbio -name "SO4_inf_R2_flnc-2.bam"
+find /rhome/wcoll010/shared/pacbio -name "SO4_inf_R3_flnc-3.bam"
+
+# Cab33
+find /rhome/wcoll010/shared/pacbio -name "cab33_con_R1_flnc-5.bam"
+find /rhome/wcoll010/shared/pacbio -name "cab33_con_R2_flnc-1.bam"
+find /rhome/wcoll010/shared/pacbio -name "cab33_inf_R1_flnc-4.bam"
+find /rhome/wcoll010/shared/pacbio -name "cab33_inf_R2_flnc-3.bam"
+find /rhome/wcoll010/shared/pacbio -name "cab33_inf_R3_flnc-4.bam"
+find /rhome/wcoll010/shared/pacbio -name "cab33_con_R3_flnc-2.bam"
+find /rhome/wcoll010/shared/pacbio -name "cab33_con_R4_flnc-1.bam"
+
+
+# 1616 (riparia X acerifolia)
+find /rhome/wcoll010/shared/pacbio -name "1616_inf_R1_flnc-2.bam"
+find /rhome/wcoll010/shared/pacbio -name "1616_con_R1_flnc-3.bam"
+find /rhome/wcoll010/shared/pacbio -name "1616_inf_R2_flnc-4.bam"
+find /rhome/wcoll010/shared/pacbio -name "1616_con_R2_flnc-2.bam"
+find /rhome/wcoll010/shared/pacbio -name "1616_con_R3_flnc-1.bam"
+find /rhome/wcoll010/shared/pacbio -name "1616_inf_R3_flnc-2.bam"
+find /rhome/wcoll010/shared/pacbio -name "1616_con_R4_flnc-3.bam"
+find /rhome/wcoll010/shared/pacbio -name "1616_inf_R4_flnc-4.bam"
+
+
+# 101-14 (already in other manifest file)
+# 5BB (already in other manifest file)
+
+
+
+### write the manifast file (file map)
+
+# SW
+
+sw_con_R1	/rhome/wcoll010/shared/pacbio/20240906_PB1154_Iso03_Kin11_15/PB1154_03_Pool3-PN_Grapevine_User-FL-RNA-Kinnex_Revio_cell1/ReadSegmentation_IsoSeq_Data_8304/outputs/sw_con_R1_flnc-4.bam	Vrip_X_Vrup
+sw_con_R2	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso08_Kin36_40/PB1161_04_PN-Pool8_Vitis_User-FL-RNA_Kinnex_Revio_cell1/Read_Segmentation_8423/outputs/sw_con_R2_flnc-5.bam	Vrip_X_Vrup
+sw_con_R3	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso09_Kin41_45/PB1161_05_PN-Pool9_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_8425/outputs/sw_con_R3_flnc-1.bam	Vrip_X_Vrup
+sw_inf_R1	/rhome/wcoll010/shared/pacbio/20240522_PB1111_Iso01_Kin1_5/PB1111_01_NC-Kin-1-5_Grape_Kinnex-FL-RNA_Revio_cell1/PB1111_01_NC-Kin-1-5_Grape_Kinnex-FL-RNA_Revio_cell1/ReadSegmentation_and_IsoSeq_Data_7871/outputs/sw_inf_R1_flnc-1.bam	Vrip_X_Vrup
+sw_inf_R2	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso07_Kin31_35/PB1161_03_PN-Pool7_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_8399/outputs/sw_inf_R2_flnc-4.bam	Vrip_X_Vrup
+sw_inf_R3	/rhome/wcoll010/shared/pacbio/20240926_PB1161_Iso11_Kin51_55/PB1161_07_PN-Pool11_Vitis_User-FL-RNA_Kinnex_Revio_cell1/Read_Segmentation_Data_8471/outputs/sw_inf_R3_flnc-4.bam	Vrip_X_Vrup
+3309_con_R1	/rhome/wcoll010/shared/pacbio/20240906_PB1154_Iso03_Kin11_15/PB1154_03_Pool3-PN_Grapevine_User-FL-RNA-Kinnex_Revio_cell1/ReadSegmentation_IsoSeq_Data_8304/outputs/3309_con_R1_flnc-2.bam	Vrip_X_Vrup
+3309_con_R2	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso05_Kin21_25/PB1161_01_PN-Pool5_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_Data_8356/outputs/3309_con_R2_flnc-1.bam	Vrip_X_Vrup
+3309_con_R3	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso07_Kin31_35/PB1161_03_PN-Pool7_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_8399/outputs/3309_con_R3_flnc-5.bam	Vrip_X_Vrup
+3309_inf_R1	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso10_Kin46_50/PB1161_06_PN-Pool10_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_8424/outputs/3309_inf_R1_flnc-5.bam	Vrip_X_Vrup
+3309_inf_R2	/rhome/wcoll010/shared/pacbio/20240926_PB1161_Iso11_Kin51_55/PB1161_07_PN-Pool11_Vitis_User-FL-RNA_Kinnex_Revio_cell1/Read_Segmentation_Data_8471/outputs/3309_inf_R2_flnc-5.bam	Vrip_X_Vrup
+3309_inf_R3	/rhome/wcoll010/shared/pacbio/20240926_PB1161_Iso12_Kin56_60/PB1161_08_PN-Pool12_Vitis_User-FL-RNA_Kinnex_Revio_cell1/Read_Segmentation_Data_8472/outputs/3309_inf_R3_flnc-5.bam	Vrip_X_Vrup
+99R_con_R1	/rhome/wcoll010/shared/pacbio/20240530_PB1111_Iso02_Kin6_10/PB1111_02_NC-Kin-6-10_Grape_Kinnex-FL-RNA_Revio_cell1/ReadSegmentation_and_IsoSeq_Data_7877/outputs/99r_con_R1_flnc-5.bam	Vber_X_Vrup
+99R_con_R2	/rhome/wcoll010/shared/pacbio/20240906_PB1154_Iso03_Kin11_15/PB1154_03_Pool3-PN_Grapevine_User-FL-RNA-Kinnex_Revio_cell1/ReadSegmentation_IsoSeq_Data_8304/outputs/99r_con_R2_flnc-1.bam	Vber_X_Vrup
+99R_con_R3	/rhome/wcoll010/shared/pacbio/20240906_PB1154_Iso04_Kin16_20/PB1154_04_Pool4-PN_Grapevine_User-FL-RNA-Kinnex_Revio_cell1/ReadSegmentation_IsoSeq_Data_8295/outputs/99r_con_R3_flnc-1.bam	Vber_X_Vrup
+99R_con_R4	/rhome/wcoll010/shared/pacbio/20240805_PB1111_Iso02_Kin6_10_2/PB1111_02_NC-Kin-6-10_Grape_Kinnex-FL-RNA_Revio_cell2/ReadSegmentation_and_IsoSeq_data_8117/outputs/99r_con_R4_flnc-5.bam	Vber_X_Vrup
+99R_inf_R1	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso07_Kin31_35/PB1161_03_PN-Pool7_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_8399/outputs/99r_inf_R1_flnc-3.bam	Vber_X_Vrup
+99R_inf_R2	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso08_Kin36_40/PB1161_04_PN-Pool8_Vitis_User-FL-RNA_Kinnex_Revio_cell1/Read_Segmentation_8423/outputs/99r_inf_R2_flnc-3.bam	Vber_X_Vrup
+99R_inf_R3	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso09_Kin41_45/PB1161_05_PN-Pool9_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_8425/outputs/99r_inf_R3_flnc-5.bam	Vber_X_Vrup
+1103_con_R1	/rhome/wcoll010/shared/pacbio/20240906_PB1154_Iso04_Kin16_20/PB1154_04_Pool4-PN_Grapevine_User-FL-RNA-Kinnex_Revio_cell1/ReadSegmentation_IsoSeq_Data_8295/outputs/1103_con_R1_flnc-5.bam	Vber_X_Vrup
+1103_con_R2	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso07_Kin31_35/PB1161_03_PN-Pool7_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_8399/outputs/1103_con_R2_flnc-1.bam	Vber_X_Vrup
+1103_con_R3	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso09_Kin41_45/PB1161_05_PN-Pool9_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_8425/outputs/1103_con_R3_flnc-3.bam	Vber_X_Vrup
+1103_inf_R1	/rhome/wcoll010/shared/pacbio/20240530_PB1111_Iso02_Kin6_10/PB1111_02_NC-Kin-6-10_Grape_Kinnex-FL-RNA_Revio_cell1/ReadSegmentation_and_IsoSeq_Data_7877/outputs/1103_inf_R1_flnc-2.bam	Vber_X_Vrup
+1103_inf_R2	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso05_Kin21_25/PB1161_01_PN-Pool5_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_Data_8356/outputs/1103_inf_R2_flnc-4.bam	Vber_X_Vrup
+1103_inf_R3	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso10_Kin46_50/PB1161_06_PN-Pool10_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_8424/outputs/1103_inf_R3_flnc-2.bam	Vber_X_Vrup
+1103_inf_R4	/rhome/wcoll010/shared/pacbio/20240805_PB1111_Iso02_Kin6_10_2/PB1111_02_NC-Kin-6-10_Grape_Kinnex-FL-RNA_Revio_cell2/ReadSegmentation_and_IsoSeq_data_8117/outputs/1103_inf_R4_flnc-2.bam	Vber_X_Vrup
+
+# save the above script as /rhome/wcoll010/shared/pacbio/IsoSeq_analyses/manifest_SW_3309_99R_1103.tsv (manifest 1)
+
+
+SO4_con_R1	/rhome/wcoll010/shared/pacbio/20240522_PB1111_Iso01_Kin1_5/PB1111_01_NC-Kin-1-5_Grape_Kinnex-FL-RNA_Revio_cell1/PB1111_01_NC-Kin-1-5_Grape_Kinnex-FL-RNA_Revio_cell1/ReadSegmentation_and_IsoSeq_Data_7871/outputs/SO4_con_R1_flnc-3.bam	Vrip_X_Vber
+SO4_con_R2	/rhome/wcoll010/shared/pacbio/20240522_PB1111_Iso01_Kin1_5/PB1111_01_NC-Kin-1-5_Grape_Kinnex-FL-RNA_Revio_cell1/PB1111_01_NC-Kin-1-5_Grape_Kinnex-FL-RNA_Revio_cell1/ReadSegmentation_and_IsoSeq_Data_7871/outputs/SO4_con_R2_flnc-4.bam	Vrip_X_Vber
+SO4_con_R3	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso06_Kin26_30/PB1161_02_PN-Pool6_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_Data_8427/outputs/SO4_con_R3_flnc-3.bam	Vrip_X_Vber
+SO4_inf_R1	/rhome/wcoll010/shared/pacbio/20240906_PB1154_Iso03_Kin11_15/PB1154_03_Pool3-PN_Grapevine_User-FL-RNA-Kinnex_Revio_cell1/ReadSegmentation_IsoSeq_Data_8304/outputs/SO4_inf_R1_flnc-5.bam	Vrip_X_Vber
+SO4_inf_R2	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso09_Kin41_45/PB1161_05_PN-Pool9_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_8425/outputs/SO4_inf_R2_flnc-2.bam	Vrip_X_Vber
+SO4_inf_R3	/rhome/wcoll010/shared/pacbio/20240926_PB1161_Iso12_Kin56_60/PB1161_08_PN-Pool12_Vitis_User-FL-RNA_Kinnex_Revio_cell1/Read_Segmentation_Data_8472/outputs/SO4_inf_R3_flnc-3.bam	Vrip_X_Vber
+cab33_con_R1	/rhome/wcoll010/shared/pacbio/20240522_PB1111_Iso01_Kin1_5/PB1111_01_NC-Kin-1-5_Grape_Kinnex-FL-RNA_Revio_cell1/PB1111_01_NC-Kin-1-5_Grape_Kinnex-FL-RNA_Revio_cell1/ReadSegmentation_and_IsoSeq_Data_7871/outputs/cab33_con_R1_flnc-5.bam	CabSauv08
+cab33_con_R2	/rhome/wcoll010/shared/pacbio/20240530_PB1111_Iso02_Kin6_10/PB1111_02_NC-Kin-6-10_Grape_Kinnex-FL-RNA_Revio_cell1/ReadSegmentation_and_IsoSeq_Data_7877/outputs/cab33_con_R2_flnc-1.bam	CabSauv08
+cab33_con_R3	/rhome/wcoll010/shared/pacbio/20240926_PB1161_Iso11_Kin51_55/PB1161_07_PN-Pool11_Vitis_User-FL-RNA_Kinnex_Revio_cell1/Read_Segmentation_Data_8471/outputs/cab33_con_R3_flnc-2.bam	CabSauv08
+cab33_con_R4	/rhome/wcoll010/shared/pacbio/20240805_PB1111_Iso02_Kin6_10_2/PB1111_02_NC-Kin-6-10_Grape_Kinnex-FL-RNA_Revio_cell2/ReadSegmentation_and_IsoSeq_data_8117/outputs/cab33_con_R4_flnc-1.bam	CabSauv08
+cab33_inf_R1	/rhome/wcoll010/shared/pacbio/20240906_PB1154_Iso04_Kin16_20/PB1154_04_Pool4-PN_Grapevine_User-FL-RNA-Kinnex_Revio_cell1/ReadSegmentation_IsoSeq_Data_8295/outputs/cab33_inf_R1_flnc-4.bam	CabSauv08
+cab33_inf_R2	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso05_Kin21_25/PB1161_01_PN-Pool5_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_Data_8356/outputs/cab33_inf_R2_flnc-3.bam	CabSauv08
+cab33_inf_R3	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso06_Kin26_30/PB1161_02_PN-Pool6_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_Data_8427/outputs/cab33_inf_R3_flnc-4.bam	CabSauv08
+1616_con_R1	/rhome/wcoll010/shared/pacbio/20240530_PB1111_Iso02_Kin6_10/PB1111_02_NC-Kin-6-10_Grape_Kinnex-FL-RNA_Revio_cell1/ReadSegmentation_and_IsoSeq_Data_7877/outputs/1616_con_R1_flnc-3.bam	Vrip_X_Vace
+1616_con_R2	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso05_Kin21_25/PB1161_01_PN-Pool5_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_Data_8356/outputs/1616_con_R2_flnc-2.bam	Vrip_X_Vace
+1616_con_R3	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso10_Kin46_50/PB1161_06_PN-Pool10_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_8424/outputs/1616_con_R3_flnc-1.bam	Vrip_X_Vace
+1616_con_R4	/rhome/wcoll010/shared/pacbio/20240805_PB1111_Iso02_Kin6_10_2/PB1111_02_NC-Kin-6-10_Grape_Kinnex-FL-RNA_Revio_cell2/ReadSegmentation_and_IsoSeq_data_8117/outputs/1616_con_R4_flnc-3.bam	Vrip_X_Vace
+1616_inf_R1	/rhome/wcoll010/shared/pacbio/20240522_PB1111_Iso01_Kin1_5/PB1111_01_NC-Kin-1-5_Grape_Kinnex-FL-RNA_Revio_cell1/PB1111_01_NC-Kin-1-5_Grape_Kinnex-FL-RNA_Revio_cell1/ReadSegmentation_and_IsoSeq_Data_7871/outputs/1616_inf_R1_flnc-2.bam	Vrip_X_Vace
+1616_inf_R2	/rhome/wcoll010/shared/pacbio/20240530_PB1111_Iso02_Kin6_10/PB1111_02_NC-Kin-6-10_Grape_Kinnex-FL-RNA_Revio_cell1/ReadSegmentation_and_IsoSeq_Data_7877/outputs/1616_inf_R2_flnc-4.bam	Vrip_X_Vace
+1616_inf_R3	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso08_Kin36_40/PB1161_04_PN-Pool8_Vitis_User-FL-RNA_Kinnex_Revio_cell1/Read_Segmentation_8423/outputs/1616_inf_R3_flnc-2.bam	Vrip_X_Vace
+1616_inf_R4	/rhome/wcoll010/shared/pacbio/20240805_PB1111_Iso02_Kin6_10_2/PB1111_02_NC-Kin-6-10_Grape_Kinnex-FL-RNA_Revio_cell2/ReadSegmentation_and_IsoSeq_data_8117/outputs/1616_inf_R4_flnc-4.bam	Vrip_X_Vace
+ripa_con_R1	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso06_Kin26_30/PB1161_02_PN-Pool6_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_Data_8427/outputs/ripa_con_R1_flnc-5.bam	Vripa
+ripa_con_R2	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso08_Kin36_40/PB1161_04_PN-Pool8_Vitis_User-FL-RNA_Kinnex_Revio_cell1/Read_Segmentation_8423/outputs/ripa_con_R2_flnc-1.bam	Vripa
+ripa_con_R3	/rhome/wcoll010/shared/pacbio/20240926_PB1161_Iso12_Kin56_60/PB1161_08_PN-Pool12_Vitis_User-FL-RNA_Kinnex_Revio_cell1/Read_Segmentation_Data_8472/outputs/ripa_con_R3_flnc-2.bam	Vripa
+ripa_inf_R1	/rhome/wcoll010/shared/pacbio/20240906_PB1154_Iso04_Kin16_20/PB1154_04_Pool4-PN_Grapevine_User-FL-RNA-Kinnex_Revio_cell1/ReadSegmentation_IsoSeq_Data_8295/outputs/ripa_inf_R1_flnc-3.bam	Vripa
+ripa_inf_R2	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso05_Kin21_25/PB1161_01_PN-Pool5_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_Data_8356/outputs/ripa_inf_R2_flnc-5.bam	Vripa
+ripa_inf_R3	/rhome/wcoll010/shared/pacbio/20240926_PB1161_Iso11_Kin51_55/PB1161_07_PN-Pool11_Vitis_User-FL-RNA_Kinnex_Revio_cell1/Read_Segmentation_Data_8471/outputs/ripa_inf_R3_flnc-1.bam	Vripa
+
+
+# save the above script as /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/manifest_SO4_cab33_1616.tsv (manifest 2)
+
+
+
+
+
+
+### create conda environment to run the isoseq data processing steps 
+
+# initialize conda for non-interactive shells
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+
+# create a focused PacBio env
+mamba create -y -p "$HOME/.conda/envs/isoseq_run_env" \
+  -c bioconda -c conda-forge \
+  isoseq pbmm2 samtools pbbam pigz
+
+
+
+
+
+
+
+### perform genome indexing for pbmm/minimap2 (genome alignment step)
+
+#!/bin/bash -l
+#SBATCH --job-name=vitis_genome_index
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=80G
+#SBATCH --time=06:00:00
+#SBATCH --output=logs/vitis_genome_index_%A_%a.out
+#SBATCH --error=logs/vitis_genome_index_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate "$HOME/.conda/envs/isoseq_run_env"
+
+GENOME_DIR="/rhome/wcoll010/shared/pacbio/genomes"
+
+# List your 6 genome folders here
+for FOLDER in Vrip_X_Vace Vber_X_Vrup Vrip_X_Vber Vrip_X_Vrup CabSauv08 Vripa; do
+    FASTA=$(ls ${GENOME_DIR}/${FOLDER}/*.fasta)
+    echo "Indexing: $FASTA"
+    pbmm2 index "$FASTA" "${FASTA%.fasta}.mmi" --preset ISOSEQ
+done
+
+
+
+
+
+
+### perform indexing for the flnc.bam files (full-length non chimeric transcripts)
+
+
+#!/bin/bash -l
+#SBATCH --job-name=flnc_index
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=80G
+#SBATCH --time=12:00:00
+#SBATCH --array=1-27  # <--- SET TO 27 for Manifest 1, then 26 for Manifest 2
+#SBATCH -p epyc
+#SBATCH --output=logs/index_flnc_%A_%a.out
+#SBATCH --error=logs/index_flnc_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# UPDATED PATHS FOR YOUR CURRENT RUNS
+MANIFEST="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/manifest_SO4_cab33_1616.tsv"
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate "$HOME/.conda/envs/isoseq_run_env"
+
+# Extract information
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$MANIFEST")
+SAMPLE=$(echo "$LINE" | cut -f1)
+FLNC_BAM=$(echo "$LINE" | cut -f2)
+
+echo "Sample: $SAMPLE"
+echo "FLNC BAM: $FLNC_BAM"
+
+if [[ -f "$FLNC_BAM" ]]; then
+    if [[ -f "${FLNC_BAM}.pbi" ]]; then
+        echo "PBI already exists: ${FLNC_BAM}.pbi"
+    else
+        echo "Indexing $FLNC_BAM ..."
+        pbindex "$FLNC_BAM"
+        echo "Done indexing."
+    fi
+else
+    echo "ERROR: File not found: $FLNC_BAM"
+    exit 1
+fi
+
+
+
+
+
+
+## perfrom de novo isoform clustering 
+
+#!/bin/bash -l
+#SBATCH --job-name=isoseq_cluster
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=128G
+#SBATCH --time=48:00:00
+#SBATCH --array=1-27%5
+#SBATCH -p epyc
+#SBATCH --output=logs/cluster_%A_%a.out
+#SBATCH --error=logs/cluster_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# Manifest for your current batch
+MANIFEST="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/manifest_SO4_cab33_1616.tsv"
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate "$HOME/.conda/envs/isoseq3_env"
+
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$MANIFEST")
+SAMPLE=$(echo "$LINE" | cut -f1)
+FLNC=$(echo "$LINE" | cut -f2)
+
+OUTDIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/clustered_samples/${SAMPLE}"
+mkdir -p "$OUTDIR"
+cd "$OUTDIR"
+
+echo "Processing sample: $SAMPLE"
+echo "Running isoseq cluster2 on $(hostname)"
+
+# Correct flag for cluster2 is -j (or --jobs)
+/usr/bin/time -v isoseq cluster2 "$FLNC" "${SAMPLE}_clustered.bam" \
+    -j "${SLURM_CPUS_PER_TASK}"
+
+echo "Done: ${SAMPLE}_clustered.bam"
+
+
+
+
+
+
+
+
+### performing alignments with pbmm / minimap2 
+
+#!/bin/bash -l
+#SBATCH --job-name=pbmm2_align
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=100G
+#SBATCH --time=48:00:00
+#SBATCH --array=1-27%5
+#SBATCH -p epyc
+#SBATCH --output=logs/align_pbmm2_%A_%a.out
+#SBATCH --error=logs/align_pbmm2_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# Choose the manifest for the run
+MANIFEST="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/manifest_SO4_cab33_1616.tsv"
+REF_BASE="/rhome/wcoll010/shared/pacbio/genomes"
+BASE_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/clustered_samples"
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate "$HOME/.conda/envs/isoseq_run_env"
+
+# 1. Get sample info from manifest
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$MANIFEST")
+SAMPLE=$(echo "$LINE" | cut -f1)
+GENOME_FOLDER=$(echo "$LINE" | cut -f3)
+
+# 2. Set Sample-specific directory and input
+SAMPLE_DIR="${BASE_DIR}/${SAMPLE}"
+INPUT_BAM="${SAMPLE_DIR}/${SAMPLE}_clustered.bam"
+OUT_BAM="${SAMPLE_DIR}/${SAMPLE}_mapped.bam"
+
+# 3. Find the correct .mmi reference
+REF=$(ls ${REF_BASE}/${GENOME_FOLDER}/*.mmi)
+
+echo "Working Directory: $SAMPLE_DIR"
+echo "Reference: $REF"
+echo "Input: $INPUT_BAM"
+
+# Safety check for input file
+if [[ ! -f "$INPUT_BAM" ]]; then
+    echo "ERROR: ${INPUT_BAM} not found. Check if cluster2 job finished."
+    exit 1
+fi
+
+# 4. Run Alignment
+/usr/bin/time -v pbmm2 align "$REF" "$INPUT_BAM" "$OUT_BAM" \
+    --preset ISOSEQ \
+    --sort \
+    --num-threads "${SLURM_CPUS_PER_TASK}" \
+    --log-level INFO
+
+echo "Alignment for $SAMPLE complete. Output: $OUT_BAM"
+
+
+
+
+
+
+
+
+
+# Pool mapped .bam files for each genotype to create concensus transcriptome
+# Also perform the isoseq collapse step (collapse redundant isoforms)
+
+#!/bin/bash -l
+#SBATCH --job-name=pool_collapse
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=80G
+#SBATCH --time=24:00:00
+#SBATCH -p epyc
+#SBATCH --output=logs/pool_analysis_%j.out
+#SBATCH --error=logs/pool_analysis_%j.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# 1. Environment Setup
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate "$HOME/.conda/envs/isoseq_run_env"
+
+# 2. Define Directories - Keeping it all in shared
+BASE_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+INPUT_DIR="${BASE_DIR}/clustered_samples"
+OUT_DIR="${BASE_DIR}/pooled_results"
+mkdir -p "$OUT_DIR"
+
+# Your 8 Rootstock groups
+ROOTSTOCKS=("SO4" "cab33" "1616" "ripa" "sw" "3309" "99R" "1103")
+
+for STOCK in "${ROOTSTOCKS[@]}"; do
+    echo "=========================================="
+    echo "Processing Rootstock: $STOCK"
+    echo "=========================================="
+
+    # Find the MAPPED bam files in the nested folders
+    # Example: clustered_samples/cab33_con_R1/cab33_con_R1_mapped.bam
+    BAMS=$(ls ${INPUT_DIR}/${STOCK}_*/${STOCK}_*_mapped.bam 2>/dev/null || true)
+    
+    if [[ -z "$BAMS" ]]; then
+        echo "WARNING: No mapped BAM files found for $STOCK. Skipping..."
+        continue
+    fi
+
+    POOLED_BAM="${OUT_DIR}/${STOCK}_pooled.sorted.bam"
+    
+    # 3. Merge and Sort
+    # Merges individual sample alignments into one master file for the rootstock
+    echo "Merging mapped BAMs for $STOCK..."
+    samtools merge -@ 3 - $BAMS | \
+    samtools sort -@ 3 -m 18G -o "$POOLED_BAM"
+    samtools index "$POOLED_BAM"
+
+    # 4. Collapse (This is where the GFF is created)
+    # This step reduces redundant reads into unique transcript models
+    echo "Running isoseq collapse to create GFF for $STOCK..."
+    isoseq collapse --do-not-collapse-extra-5exons \
+        --num-threads "${SLURM_CPUS_PER_TASK}" \
+        "$POOLED_BAM" \
+        "${OUT_DIR}/${STOCK}_pooled.gff"
+
+    echo "Done with $STOCK"
+done
+
+echo "Workflow complete. Final GFFs are in $OUT_DIR"
+
+
+
+
+
+
+
+### map reads from each sample (flnc.bam files) back to the master transcriptome to get gene count data (raw isoform expression quantification)
+
+#!/bin/bash -l
+#SBATCH --job-name=quant_all
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=80G
+#SBATCH --time=24:00:00
+#SBATCH --array=1-53%12
+#SBATCH -p epyc
+#SBATCH --output=logs/quant_%A_%a.out
+#SBATCH --error=logs/quant_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate "$HOME/.conda/envs/isoseq_run_env"
+
+# --- PATHS ---
+# Using the master manifest we created for the 53 samples
+MANIFEST="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/manifest_MASTER_53.tsv"
+# This is where your pooled .fasta files were just created
+POOLED_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/pooled_results"
+# Output directory for counts
+QUANT_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/quantification"
+mkdir -p "$QUANT_DIR"
+
+# 1. Parse Sample Info
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$MANIFEST")
+SAMPLE=$(echo "$LINE" | cut -f1)
+FLNC_BAM=$(echo "$LINE" | cut -f2)
+ROOTSTOCK=$(echo "$SAMPLE" | cut -d'_' -f1) # Extracts SO4, cab33, etc.
+
+# 2. Select the correct Master Transcriptome
+# Matches the naming convention from your previous step: STOCK_pooled.fasta
+REF_FASTA="${POOLED_DIR}/${ROOTSTOCK}_pooled.fasta"
+MAPPED_BAM="${QUANT_DIR}/${SAMPLE}.mapped_to_master.bam"
+
+echo "Quantifying $SAMPLE against $ROOTSTOCK master transcriptome..."
+
+# 3. Map FLNC reads to Master Transcriptome
+pbmm2 align "$REF_FASTA" "$FLNC_BAM" "$MAPPED_BAM" \
+    --preset ISOSEQ \
+    --sort \
+    --num-threads "${SLURM_CPUS_PER_TASK}" \
+    --log-level INFO
+
+# 4. Generate Counts
+# We use samtools to count how many FLNC reads assigned to each unique isoform
+samtools view "$MAPPED_BAM" | cut -f3 | sort | uniq -c | \
+    awk '{print $2"\t"$1}' > "${MAPPED_BAM}.counts"
+
+echo "Finished $SAMPLE"
+
+
+
+
+
+
+
+### generate count matrices
+
+#!/bin/bash -l
+#SBATCH --job-name=merge_all_matrices
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=20G
+#SBATCH --time=04:00:00
+#SBATCH --output=logs/merge_final_%j.out
+#SBATCH --error=logs/merge_final_%j.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate "$HOME/.conda/envs/isoseq_run_env"
+
+PYTHON_SCRIPT="04_merge_counts.py"
+QUANT_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/quantification"
+ROOTSTOCKS=("SO4" "cab33" "1616" "ripa" "sw" "3309" "99R" "1103")
+
+echo "Starting Global Merge..."
+
+for STOCK in "${ROOTSTOCKS[@]}"; do
+    echo "Merging counts for $STOCK..."
+    
+    # We create a temporary subdirectory for this stock to help the Python script
+    TEMP_STOCK_DIR="${QUANT_DIR}/${STOCK}_temp"
+    mkdir -p "$TEMP_STOCK_DIR"
+    
+    # Link only the files belonging to this stock
+    ln -sf ${QUANT_DIR}/${STOCK}_*.counts "$TEMP_STOCK_DIR/"
+    
+    python "$PYTHON_SCRIPT" \
+        "$TEMP_STOCK_DIR" \
+        "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/${STOCK}_abundance.tsv"
+    
+    # Clean up temp links
+    rm -rf "$TEMP_STOCK_DIR"
+done
+
+echo "All 8 abundance matrices created."
+
+
+
+
+
+
+
+### Clean the abundance/isoform count files to fit the format sqanti3 needs
+
+# start interactive bash session
+srun --mem=50g --cpus-per-task 1 --time=01:00:00 --pty bash -l
+
+# set working directory
+cd /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2
+
+# activate the sqanit3 conda environment
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate /rhome/wcoll010/bigdata_groenlab/conda_envs/sqanti3_env
+
+ROOTSTOCKS=("1103" "99R" "3309" "sw" "SO4" "1616" "cab33" "ripa")
+
+for STOCK in "${ROOTSTOCKS[@]}"; do
+    echo "Cleaning abundance for $STOCK..."
+    python -c "
+import pandas as pd
+df = pd.read_csv('${STOCK}_abundance.tsv', sep='\t')
+# 1. Clean the ID: Keep only the part before the first pipe '|'
+# This changes 'PB.1.1|PB.1.1:63333...' to just 'PB.1.1'
+df['pbid'] = df['isoform'].str.split('|').str[0]
+# 2. Sum all count columns (all columns except the original 'isoform' and our new 'pbid')
+count_cols = [c for c in df.columns if c not in ['isoform', 'pbid']]
+df['count_fl'] = df[count_cols].sum(axis=1)
+# 3. Save with the header SQANTI3 expects
+df[['pbid', 'count_fl']].to_csv('${STOCK}_abundance_clean.tsv', sep='\t', index=False)
+"
+done
+
+
+
+
+
+
+
+
+
+### Making a .gtf genome annotation file using AGAT
+### Need to convert the gff3 to .gtf for sqanti3
+
+# Define the path
+AGAT_PATH="/rhome/wcoll010/bigdata_groenlab/conda_envs/agat_env"
+
+# Create the environment
+conda create -p "$AGAT_PATH" -c bioconda agat -y
+
+
+
+# run AGAT for .gff3 to .gtf conversion
+
+#!/bin/bash -l
+#SBATCH --job-name=agat_array
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=50G
+#SBATCH --time=08:00:00
+#SBATCH -p epyc
+#SBATCH --array=0-5
+#SBATCH --output=logs/agat_%A_%a.out
+#SBATCH --error=logs/agat_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+
+set -euo pipefail
+
+# 1. Setup Environment using the BIGDATA path
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate /rhome/wcoll010/bigdata_groenlab/conda_envs/agat_env
+
+# 2. Genome Folders (The 6 unique ones for your 8 rootstocks)
+GENOMES=("Vber_X_Vrup" "Vrip_X_Vrup" "Vrip_X_Vber" "Vrip_X_Vace" "CabSauv08" "Vripa")
+REF_BASE="/rhome/wcoll010/shared/pacbio/genomes"
+
+G_DIR=${GENOMES[$SLURM_ARRAY_TASK_ID]}
+GENOME_PATH="${REF_BASE}/${G_DIR}"
+
+# 3. Find GFF3 and Define Output
+# This logic picks the first .gff3 file it finds in the folder
+GFF=$(ls ${GENOME_PATH}/*.gff3 | head -n 1)
+OUT_GTF="${GENOME_PATH}/genome_reference.gtf"
+
+echo "Converting $G_DIR GFF3 to GTF for SQANTI3..."
+
+# 4. Run AGAT Conversion
+agat_convert_sp_gff2gtf.pl --gff "$GFF" -o "$OUT_GTF"
+
+echo "Successfully created: $OUT_GTF"
+
+# Submitted batch job 22572262
+
+
+
+
+
+
+
+
+
+
+### run the sqanti3 QC step
+
+#!/bin/bash -l
+#SBATCH --job-name=sqanti_qc
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=96G
+#SBATCH --time=48:00:00
+#SBATCH -p epyc
+#SBATCH --array=0-7
+#SBATCH --output=logs/sqanti_qc_%A_%a.out
+#SBATCH --error=logs/sqanti_qc_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# 1. Environment Setup
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate /rhome/wcoll010/bigdata_groenlab/conda_envs/sqanti3_env
+
+# 2. Explicit Pathing
+# This is where your code/software lives
+SOFTWARE_DIR="/rhome/wcoll010/bigdata_groenlab/iso_seq"
+SQANTI_TOOL_DIR="${SOFTWARE_DIR}/SQANTI3"
+SQANTI_PY="${SQANTI_TOOL_DIR}/sqanti3_qc.py"
+
+# This is where your sample data lives
+DATA_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+# Ensure internal SQANTI3 utilities are in the PATH
+export PATH=$PATH:${SQANTI_TOOL_DIR}/utilities
+
+# 3. Sample & Genome Mapping
+ROOTSTOCKS=("1103" "99R" "3309" "sw" "SO4" "1616" "cab33" "ripa")
+GENOME_DIRS=("Vber_X_Vrup" "Vber_X_Vrup" "Vrip_X_Vrup" "Vrip_X_Vrup" "Vrip_X_Vber" "Vrip_X_Vace" "CabSauv08" "Vripa")
+
+STOCK=${ROOTSTOCKS[$SLURM_ARRAY_TASK_ID]}
+G_DIR=${GENOME_DIRS[$SLURM_ARRAY_TASK_ID]}
+
+REF_PATH="/rhome/wcoll010/shared/pacbio/genomes/${G_DIR}"
+REF_GTF="${REF_PATH}/genome_reference.gtf"
+REF_FASTA=$(ls ${REF_PATH}/*.fasta | head -n 1)
+
+echo "Processing $STOCK with Reference $G_DIR"
+
+# 4. Run SQANTI3 QC
+python "$SQANTI_PY" \
+    --isoforms "${DATA_DIR}/pooled_results/${STOCK}_pooled.gff" \
+    --refGTF "$REF_GTF" \
+    --refFasta "$REF_FASTA" \
+    --fl_count "${DATA_DIR}/${STOCK}_abundance_clean.tsv" \
+    --cpus ${SLURM_CPUS_PER_TASK} \
+    --dir "${DATA_DIR}/sqanti_results/${STOCK}_sqanti" \
+    --output "${STOCK}_sqanti" \
+    --report pdf
+
+echo "QC for $STOCK complete."
+
+
+
+
+
+
+
+
+
+
+# run the sqanti3 filtering step (generate a polished transcriptome model, with artifacts removed)
+
+#!/bin/bash -l
+#SBATCH --job-name=sqanti_filter
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=64G
+#SBATCH --time=12:00:00
+#SBATCH -p epyc
+#SBATCH --array=0-7
+#SBATCH --output=logs/filter_%A_%a.out
+#SBATCH --error=logs/filter_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# 1. Activate Environment
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate /rhome/wcoll010/bigdata_groenlab/conda_envs/sqanti3_env
+
+# 2. Paths
+BASE_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+SOFTWARE_DIR="/rhome/wcoll010/bigdata_groenlab/iso_seq"
+FILTER_PY="${SOFTWARE_DIR}/SQANTI3/sqanti3_filter.py"
+
+ROOTSTOCKS=("1103" "99R" "3309" "sw" "SO4" "1616" "cab33" "ripa")
+STOCK=${ROOTSTOCKS[$SLURM_ARRAY_TASK_ID]}
+
+# 3. Define Input/Output Folders
+QC_DIR="${BASE_DIR}/sqanti_results/${STOCK}_sqanti"
+OUT_DIR="${QC_DIR}/filter_results"
+mkdir -p "$OUT_DIR"
+
+echo "Filtering $STOCK..."
+
+# Note: Using the specific flags you verified (-d, -o, --sqanti_class)
+python "$FILTER_PY" rules \
+    --sqanti_class "${QC_DIR}/${STOCK}_sqanti_classification.txt" \
+    --filter_isoforms "${QC_DIR}/${STOCK}_sqanti_corrected.fasta" \
+    --filter_gtf "${QC_DIR}/${STOCK}_sqanti_corrected.gtf" \
+    -d "$OUT_DIR" \
+    -o "${STOCK}_filtered"
+
+echo "Filtering for $STOCK complete."
+
+
+
+
+
+
+
+
+
+### create gene/isoform count matrices that can be used for differential expression (DEseq2) and differential isoform usage anaylsis 
+
+
+# write the python file to process the count matrices
+cat << 'EOF' > /rhome/wcoll010/bigdata_groenlab/iso_seq/08_prep_DE_counts_v2.py
+import pandas as pd
+import argparse
+import sys
+
+def filter_replicate_matrix(counts_file, classification_file, output_file):
+    print(f"Loading Master File: {counts_file}")
+    
+    # 1. Load the list of IDs that survived the SQANTI filter
+    class_df = pd.read_csv(classification_file, sep="\t")
+    valid_ids = set(class_df['isoform'])
+    print(f"  Valid isoforms in filtered list: {len(valid_ids)}")
+
+    # 2. Load the Master abundance file
+    df = pd.read_csv(counts_file, sep="\t")
+    id_col = df.columns[0]
+    
+    # 3. Match logic: Split the pipe and check if the short ID is in valid_ids
+    # This keeps all your columns (con_R1, inf_R1, etc.) exactly as they are.
+    initial_rows = len(df)
+    
+    # We create a temporary column to do the matching so we don't lose the original ID format if you want to keep it
+    # OR we replace it with the short ID for better R compatibility (recommended)
+    df[id_col] = df[id_col].str.split('|').str[0]
+    
+    # Filter
+    filtered_df = df[df[id_col].isin(valid_ids)].copy()
+    
+    print(f"  Rows before filter: {initial_rows}")
+    print(f"  Rows after filter:  {len(filtered_df)}")
+    print(f"  Saving DE-ready matrix to: {output_file}")
+    
+    filtered_df.to_csv(output_file, sep="\t", index=False)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--counts")
+    parser.add_argument("--class_file")
+    parser.add_argument("--output")
+    args = parser.parse_args()
+    filter_replicate_matrix(args.counts, args.class_file, args.output)
+EOF
+
+
+
+# run the bash script
+
+#!/bin/bash -l
+#SBATCH --job-name=prep_DE_array
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=40G
+#SBATCH --time=02:00:00
+#SBATCH -p epyc
+#SBATCH --array=0-7
+#SBATCH --output=logs/prep_DE_%A_%a.out
+#SBATCH --error=logs/prep_DE_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+
+set -euo pipefail
+
+# 1. Activate Environment
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate /rhome/wcoll010/bigdata_groenlab/conda_envs/sqanti3_env
+
+# 2. Paths
+BASE_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+PYTHON_SCRIPT="/rhome/wcoll010/bigdata_groenlab/iso_seq/08_prep_DE_counts_v2.py"
+ROOTSTOCKS=("1103" "99R" "3309" "sw" "SO4" "1616" "cab33" "ripa")
+STOCK=${ROOTSTOCKS[$SLURM_ARRAY_TASK_ID]}
+
+# 3. Define Files
+RAW_COUNTS="${BASE_DIR}/${STOCK}_abundance.tsv"
+FILTERED_CLASS="${BASE_DIR}/sqanti_results/${STOCK}_sqanti/filter_results/${STOCK}_filtered_RulesFilter_result_classification.txt"
+OUTPUT_COUNTS="${BASE_DIR}/${STOCK}_counts_for_DE.txt"
+
+echo "Preparing DE Matrix for $STOCK..."
+
+# Run the Python script you previously developed
+python "$PYTHON_SCRIPT" \
+    --counts "$RAW_COUNTS" \
+    --class_file "$FILTERED_CLASS" \
+    --output "$OUTPUT_COUNTS"
+
+echo "DE Ready matrix created for $STOCK."
+
+
+
+###

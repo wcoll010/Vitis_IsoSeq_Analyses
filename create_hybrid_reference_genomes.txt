@@ -1,0 +1,72 @@
+
+# The reference genomes (.fasta) and genome annotation files (.gff3) used here are available online at: https://grapegenomics.com/
+# Grapegenomics.com: a web portal with genomic data and analysis tools for wild and cultivated grapevines
+# Cochetel Noé, Cantu Dario
+# Zenodo (2024) https://doi.org/10.5281/zenodo.10570120
+
+
+
+# Create reference genomes for interspecific hybrid grapevines by merging available reference genomes for the parental species using command line arguments 
+
+# Combine FASTAs
+cat /rhome/wcoll010/shared/pacbio/genomes/V_riparia/VITVri588271_v1.0.fasta \
+    /rhome/wcoll010/shared/pacbio/genomes/V_rupestris/VITVrpB38_v1.0.fasta > Vrip_X_Vrup_genome.fasta
+
+# Combine GFFs while removing internal headers
+echo "##gff-version 3" > Vrip_X_Vrup.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_riparia/VITVri588271_v1.0.gff3 >> Vrip_X_Vrup.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_rupestris/VITVrpB38_v1.0.gff3 >> Vrip_X_Vrup.gff3
+
+
+# Check FASTA 
+head Vrip_X_Vrup_genome.fasta -n 5
+
+# Check GFF
+head Vrip_X_Vrup.gff3 -n 5
+
+# Check if Riparia IDs are present
+grep -c "VITVri" Vrip_X_Vrup.gff3
+
+# Check if Rupestris IDs are present
+grep -c "VITVrp" Vrip_X_Vrup.gff3
+
+# Check FASTA header
+grep ">" Vrip_X_Vrup_genome.fasta | head -n 1
+
+# Check GFF column 1
+grep -v "^#" Vrip_X_Vrup.gff3 | head -n 1 | cut -f1
+
+## worked!!
+## the VripXVrup will be used for SW, 3309, and 101-14
+
+
+
+### Do the same thing for V rup X V berl and V rip and V berl
+
+# for V rup X V berl
+cat /rhome/wcoll010/shared/pacbio/genomes/V_berlandieri/VITVbe9031_v1.0.fasta \
+    /rhome/wcoll010/shared/pacbio/genomes/V_rupestris/VITVrpB38_v1.0.fasta > Vber_X_Vrup_genome.fasta
+
+echo "##gff-version 3" > Vber_X_Vrup.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_berlandieri/VITVbe9031_v1.0.gff3 >> Vber_X_Vrup.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_rupestris/VITVrpB38_v1.0.gff3 >> Vber_X_Vrup.gff3
+
+
+## for V rip X V berl
+cat /rhome/wcoll010/shared/pacbio/genomes/V_riparia/VITVri588271_v1.0.fasta \
+    /rhome/wcoll010/shared/pacbio/genomes/V_berlandieri/VITVbe9031_v1.0.fasta > Vrip_X_Vber_genome.fasta
+    
+echo "##gff-version 3" > Vrip_X_Vber.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_riparia/VITVri588271_v1.0.gff3 >> Vrip_X_Vber.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_berlandieri/VITVbe9031_v1.0.gff3 >> Vrip_X_Vber.gff3
+
+
+
+
+## for V rip X V acer (1616)
+cat /rhome/wcoll010/shared/pacbio/genomes/Vripa/VITVri588271_v1.0.fasta \
+    /rhome/wcoll010/shared/pacbio/genomes/V_acerifolia/VITVac9018_v1.0.fasta > Vrip_X_Vace_genome.fasta
+    
+echo "##gff-version 3" > Vrip_X_Vace.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/Vripa/VITVri588271_v1.0.gff3 >> Vrip_X_Vace.gff3
+grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_acerifolia/VITVac9018_v1.0.gff3 >> Vrip_X_Vace.gff3

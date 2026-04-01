@@ -1,0 +1,49 @@
+### Build conda environment with the pbmm2 and the other PacBio isoseq tools
+
+# Initialize conda for non-interactive shells (same path as before)
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+
+# Create a focused PacBio env
+mamba create -y -p "$HOME/.conda/envs/isoseq_run_env" \
+  -c bioconda -c conda-forge \
+  isoseq pbmm2 samtools pbbam pigz
+
+
+
+
+
+### Build conda environment for sqanti3 (data processing, downstream of PacBio isoseq step)
+
+# Write the data somewhere so it doenst take up space in my 20GB home directory 
+# Create a folder for conda environments in bigdata
+mkdir -p /rhome/wcoll010/bigdata_groenlab/conda_envs
+
+# Go to your iso_seq working directory
+cd /rhome/wcoll010/bigdata_groenlab/iso_seq
+
+# Download the tools by cloning SQANTI3
+git clone https://github.com/ConesaLab/SQANTI3.git
+
+
+# Create the environment from the YML file
+cd /rhome/wcoll010/bigdata_groenlab/iso_seq
+
+mamba env create -f SQANTI3/SQANTI3.conda_env.yml -p /rhome/wcoll010/bigdata_groenlab/conda_envs/sqanti3_env
+
+
+
+
+
+
+### Build conda environment for AGAT (converting .gff3 files to .gtf)
+
+# Define the path
+AGAT_PATH="/rhome/wcoll010/bigdata_groenlab/conda_envs/agat_env"
+
+# Create the environment
+conda create -p "$AGAT_PATH" -c bioconda agat -y
+
+
+
+
+
