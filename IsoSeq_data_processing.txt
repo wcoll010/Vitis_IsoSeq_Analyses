@@ -1,5 +1,5 @@
 ### The initial data pre-processing for Iso-seq data (lima (Remove cDNA primers); isoseq refine (Remove polyA tail and artificial concatemers)) \
-### was performed at the UC Davis DNA Technologies and Expression Analysis Core sequencing where library sequencing was performed
+### was performed at the UC Davis DNA Technologies and Expression Analysis Core where library sequencing was performed
 
 ### The reference genomes (.fasta) and genome annotation files (.gff3) used here are available online at: https://grapegenomics.com/
 ### Grapegenomics.com: a web portal with genomic data and analysis tools for wild and cultivated grapevines, Cochetel Noé, Cantu Dario, Zenodo (2024) https://doi.org/10.5281/zenodo.10570120
@@ -84,93 +84,11 @@ grep -v "^#" /rhome/wcoll010/shared/pacbio/genomes/V_acerifolia/VITVac9018_v1.0.
 
 
 
-#####
-# start iso seq processing, following the same workflow as before (conda environemnt and scripts are already set up)
 
-### the initial data pre-processing for Iso-seq data was \
-### performed at the UC Davis The DNA Technologies and Expression Analysis Core \
-### where library prep and sequencing was performed
-### the data pre-processing steps (lima (Remove cDNA primers); isoseq refine (Remove polyA tail and artificial concatemers))
-### use the scripts and workflow we followed are described online here: https://isoseq.how/
 
+### Start Vitis Iso-seq data processing
 
 ### write a 'manifest' file which has sample names and full file paths using nano text editor 
-
-# find the full file paths to the flnc.bam files 
-
-# SW (riparia X rupestris)
-find /rhome/wcoll010/shared/pacbio -name "sw_inf_R1_flnc-1.bam"
-find /rhome/wcoll010/shared/pacbio -name "sw_con_R1_flnc-4.bam"
-find /rhome/wcoll010/shared/pacbio -name "sw_inf_R2_flnc-4.bam"
-find /rhome/wcoll010/shared/pacbio -name "sw_con_R2_flnc-5.bam"
-find /rhome/wcoll010/shared/pacbio -name "sw_con_R3_flnc-1.bam"
-find /rhome/wcoll010/shared/pacbio -name "sw_inf_R3_flnc-4.bam"
-
-
-# 3309 (riparia X rupestris)
-find /rhome/wcoll010/shared/pacbio -name "3309_con_R1_flnc-2.bam"
-find /rhome/wcoll010/shared/pacbio -name "3309_con_R2_flnc-1.bam"
-find /rhome/wcoll010/shared/pacbio -name "3309_con_R3_flnc-5.bam"
-find /rhome/wcoll010/shared/pacbio -name "3309_inf_R1_flnc-5.bam"
-find /rhome/wcoll010/shared/pacbio -name "3309_inf_R2_flnc-5.bam"
-find /rhome/wcoll010/shared/pacbio -name "3309_inf_R3_flnc-5.bam"
-
-# 99R
-find /rhome/wcoll010/shared/pacbio -name "99r_con_R1_flnc-5.bam"
-find /rhome/wcoll010/shared/pacbio -name "99r_con_R2_flnc-1.bam"
-find /rhome/wcoll010/shared/pacbio -name "99r_con_R2_flnc-1.bam"
-find /rhome/wcoll010/shared/pacbio -name "99r_inf_R1_flnc-3.bam"
-find /rhome/wcoll010/shared/pacbio -name "99r_inf_R2_flnc-3.bam"
-find /rhome/wcoll010/shared/pacbio -name "99r_inf_R3_flnc-5.bam"
-find /rhome/wcoll010/shared/pacbio -name "99r_con_R4_flnc-5.bam"
-
-# 1103
-find /rhome/wcoll010/shared/pacbio -name "1103_inf_R1_flnc-2.bam"
-find /rhome/wcoll010/shared/pacbio -name "1103_con_R1_flnc-5.bam"
-find /rhome/wcoll010/shared/pacbio -name "1103_inf_R2_flnc-4.bam"
-find /rhome/wcoll010/shared/pacbio -name "1103_con_R2_flnc-1.bam"
-find /rhome/wcoll010/shared/pacbio -name "1103_con_R3_flnc-3.bam"
-find /rhome/wcoll010/shared/pacbio -name "1103_inf_R3_flnc-2.bam"
-find /rhome/wcoll010/shared/pacbio -name "1103_inf_R4_flnc-2.bam"
-
-
-# SO4 (riparia X berlandieri)
-find /rhome/wcoll010/shared/pacbio -name "SO4_con_R1_flnc-3.bam"
-find /rhome/wcoll010/shared/pacbio -name "SO4_con_R2_flnc-4.bam"
-find /rhome/wcoll010/shared/pacbio -name "SO4_inf_R1_flnc-5.bam"
-find /rhome/wcoll010/shared/pacbio -name "SO4_con_R3_flnc-3.bam"
-find /rhome/wcoll010/shared/pacbio -name "SO4_inf_R2_flnc-2.bam"
-find /rhome/wcoll010/shared/pacbio -name "SO4_inf_R3_flnc-3.bam"
-
-# Cab33
-find /rhome/wcoll010/shared/pacbio -name "cab33_con_R1_flnc-5.bam"
-find /rhome/wcoll010/shared/pacbio -name "cab33_con_R2_flnc-1.bam"
-find /rhome/wcoll010/shared/pacbio -name "cab33_inf_R1_flnc-4.bam"
-find /rhome/wcoll010/shared/pacbio -name "cab33_inf_R2_flnc-3.bam"
-find /rhome/wcoll010/shared/pacbio -name "cab33_inf_R3_flnc-4.bam"
-find /rhome/wcoll010/shared/pacbio -name "cab33_con_R3_flnc-2.bam"
-find /rhome/wcoll010/shared/pacbio -name "cab33_con_R4_flnc-1.bam"
-
-
-# 1616 (riparia X acerifolia)
-find /rhome/wcoll010/shared/pacbio -name "1616_inf_R1_flnc-2.bam"
-find /rhome/wcoll010/shared/pacbio -name "1616_con_R1_flnc-3.bam"
-find /rhome/wcoll010/shared/pacbio -name "1616_inf_R2_flnc-4.bam"
-find /rhome/wcoll010/shared/pacbio -name "1616_con_R2_flnc-2.bam"
-find /rhome/wcoll010/shared/pacbio -name "1616_con_R3_flnc-1.bam"
-find /rhome/wcoll010/shared/pacbio -name "1616_inf_R3_flnc-2.bam"
-find /rhome/wcoll010/shared/pacbio -name "1616_con_R4_flnc-3.bam"
-find /rhome/wcoll010/shared/pacbio -name "1616_inf_R4_flnc-4.bam"
-
-
-# 101-14 (already in other manifest file)
-# 5BB (already in other manifest file)
-
-
-
-### write the manifast file (file map)
-
-# SW
 
 sw_con_R1	/rhome/wcoll010/shared/pacbio/20240906_PB1154_Iso03_Kin11_15/PB1154_03_Pool3-PN_Grapevine_User-FL-RNA-Kinnex_Revio_cell1/ReadSegmentation_IsoSeq_Data_8304/outputs/sw_con_R1_flnc-4.bam	Vrip_X_Vrup
 sw_con_R2	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso08_Kin36_40/PB1161_04_PN-Pool8_Vitis_User-FL-RNA_Kinnex_Revio_cell1/Read_Segmentation_8423/outputs/sw_con_R2_flnc-5.bam	Vrip_X_Vrup
@@ -199,7 +117,7 @@ sw_inf_R3	/rhome/wcoll010/shared/pacbio/20240926_PB1161_Iso11_Kin51_55/PB1161_07
 1103_inf_R3	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso10_Kin46_50/PB1161_06_PN-Pool10_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_8424/outputs/1103_inf_R3_flnc-2.bam	Vber_X_Vrup
 1103_inf_R4	/rhome/wcoll010/shared/pacbio/20240805_PB1111_Iso02_Kin6_10_2/PB1111_02_NC-Kin-6-10_Grape_Kinnex-FL-RNA_Revio_cell2/ReadSegmentation_and_IsoSeq_data_8117/outputs/1103_inf_R4_flnc-2.bam	Vber_X_Vrup
 
-# save the above script as /rhome/wcoll010/shared/pacbio/IsoSeq_analyses/manifest_SW_3309_99R_1103.tsv (manifest 1)
+# save the above code as /rhome/wcoll010/shared/pacbio/IsoSeq_analyses/manifest_SW_3309_99R_1103.tsv (manifest 1)
 
 
 SO4_con_R1	/rhome/wcoll010/shared/pacbio/20240522_PB1111_Iso01_Kin1_5/PB1111_01_NC-Kin-1-5_Grape_Kinnex-FL-RNA_Revio_cell1/PB1111_01_NC-Kin-1-5_Grape_Kinnex-FL-RNA_Revio_cell1/ReadSegmentation_and_IsoSeq_Data_7871/outputs/SO4_con_R1_flnc-3.bam	Vrip_X_Vber
@@ -229,7 +147,6 @@ ripa_con_R3	/rhome/wcoll010/shared/pacbio/20240926_PB1161_Iso12_Kin56_60/PB1161_
 ripa_inf_R1	/rhome/wcoll010/shared/pacbio/20240906_PB1154_Iso04_Kin16_20/PB1154_04_Pool4-PN_Grapevine_User-FL-RNA-Kinnex_Revio_cell1/ReadSegmentation_IsoSeq_Data_8295/outputs/ripa_inf_R1_flnc-3.bam	Vripa
 ripa_inf_R2	/rhome/wcoll010/shared/pacbio/20240917_PB1161_Iso05_Kin21_25/PB1161_01_PN-Pool5_Vitis_User-FL-RNA_Kinnex_Revio_cell1/ReadSegmentation_Data_8356/outputs/ripa_inf_R2_flnc-5.bam	Vripa
 ripa_inf_R3	/rhome/wcoll010/shared/pacbio/20240926_PB1161_Iso11_Kin51_55/PB1161_07_PN-Pool11_Vitis_User-FL-RNA_Kinnex_Revio_cell1/Read_Segmentation_Data_8471/outputs/ripa_inf_R3_flnc-1.bam	Vripa
-
 
 # save the above script as /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/manifest_SO4_cab33_1616.tsv (manifest 2)
 
@@ -284,8 +201,7 @@ done
 
 
 
-### perform indexing for the flnc.bam files (full-length non chimeric transcripts)
-
+### perform indexing for the flnc.bam files (full-length non chimeric transcripts for each sample)
 
 #!/bin/bash -l
 #SBATCH --job-name=flnc_index
@@ -379,7 +295,8 @@ echo "Done: ${SAMPLE}_clustered.bam"
 
 
 
-### performing alignments with pbmm / minimap2 
+
+### performing alignments with pbmm / minimap2 (aligning reads to the reference genomes)
 
 #!/bin/bash -l
 #SBATCH --job-name=pbmm2_align
