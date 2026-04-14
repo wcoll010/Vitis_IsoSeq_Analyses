@@ -1,0 +1,171 @@
+#!/bin/bash -l
+#SBATCH --job-name=egg_array
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=80G
+#SBATCH --time=60:00:00
+#SBATCH --array=0-9%5
+#SBATCH -p epyc
+#SBATCH --output=logs/eggnog_%A_%a.out
+#SBATCH --error=logs/eggnog_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# 1. Load the module
+module load eggnog-mapper/2.1.9
+
+# 2. Define the Genomes (Matching your provided paths exactly)
+GENOMES=("99R" "101-14" "1616" "3309" "5BB" "SO4" "ripa" "cab33" "sw" "1103")
+
+# Get the specific genome for this task
+GENO=${GENOMES[$SLURM_ARRAY_TASK_ID]}
+
+# 3. Paths
+BASE_DIR="/rhome/wcoll010/bigdata_groenlab/iso_seq/sqanti_results"
+OUT_DIR="/rhome/wcoll010/bigdata_groenlab/iso_seq/eggnog_results"
+mkdir -p $OUT_DIR
+
+# Define Input File Path
+# Pattern: .../sqanti_results/99R_sqanti/99R_sqanti_corrected.faa
+IN_FILE="${BASE_DIR}/${GENO}_sqanti/${GENO}_sqanti_corrected.faa"
+
+# 4. Resume Logic: Check if output already exists
+if [[ -f "${OUT_DIR}/${GENO}_eggnog.emapper.annotations" ]]; then
+    echo "SKIPPING: ${GENO} already has an annotation file."
+    exit 0
+fi
+
+echo "Starting eggNOG-mapper for: $GENO"
+echo "Input file: $IN_FILE"
+
+# 5. Run emapper
+# --dbmem: loads the DB into RAM (fast, uses the 80G you requested)
+# --cpu 8: matches your SLURM request
+emapper.py -i "$IN_FILE" \
+           --output "${GENO}_eggnog" \
+           --output_dir "$OUT_DIR" \
+           -m diamond \
+           --cpu 8 \
+           --dbmem \
+           --override
+
+echo "Finished $GENO"
+
+
+
+
+
+
+
+### annotate differentially expressed isoforms with eggNog annotations 
+
+# set working directory
+cd /rhome/wcoll010/bigdata_groenlab/iso_seq
+
+# activate R
+R
+
+# load R libraries 
+library(tidyverse)
+
+# 1. Load the DE Isoforms file
+# This contains your 'isoform' IDs (e.g., PB.61685.1)
+de_isoforms <- read.csv("/rhome/wcoll010/bigdata_groenlab/iso_seq/DE_isoforms/1616_upreg_isoforms.csv")
+
+# 2. Load the eggNOG Annotations
+# We skip the first 4 lines of comments. 
+# Note: eggNOG's first column '#query' often reads in as 'X.query' or 'query'
+eggnog_annot <- read.delim("/rhome/wcoll010/bigdata_groenlab/iso_seq/eggnog_results/1616_eggnog.emapper.annotations", 
+                           skip = 4, 
+                           header = TRUE, 
+                           sep = "\t", 
+                           quote = "")
+
+# Standardize the query column name to match 'isoform'
+eggnog_annot <- eggnog_annot %>%
+  rename(isoform = X.query) # Adjust this to 'query' if your R version doesn't add the 'X'
+
+# 3. Perform the Merge
+# A left_join keeps all DE isoforms, even if they didn't get an eggNOG hit (NA)
+annotated_results <- de_isoforms %>%
+  left_join(eggnog_annot, by = "isoform")
+
+# 4. Save the annotated file
+write.csv(annotated_results, 
+          "/rhome/wcoll010/bigdata_groenlab/iso_seq/1616_upreg_annotated.csv", 
+          row.names = FALSE)
+
+
+
+
+### annotated genes under differential isoform usage 
+
+# activate R in command line
+R
+
+# load R libraries 
+library(tidyverse)
+
+# --- 1. Global Setup ---
+genotypes <- c("sw", "ripa", "cab33", "SO4", "3309", "101-14", "5BB", "99R", "1103", "1616")
+base_dir  <- "/rhome/wcoll010/bigdata_groenlab/iso_seq/"
+egg_dir   <- "/rhome/wcoll010/bigdata_groenlab/iso_seq/eggnog_results/"
+
+# --- 2. Start Loop ---
+for (geno in genotypes) {
+  cat("\nProcessing Genotype:", geno, "...\n")
+  
+  # A. Define Paths (Handling the 1616 and SO4 naming exceptions)
+  diu_path  <- paste0(base_dir, geno, "_significant_isoform_switches.csv")
+  egg_path  <- paste0(egg_dir, geno, "_eggnog.emapper.annotations")
+  
+  # Bridge path logic (1616 is in shared; others are in bigdata)
+  if (geno == "1616") {
+    bridge_path <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/sqanti_results/1616_FINAL_RECOVERY_sqanti/1616_FINAL_RECOVERY_sqanti_classification.txt"
+  } else {
+    # Assuming standard path for others based on your previous messages
+    bridge_path <- paste0(base_dir, "sqanti_results/", geno, "_sqanti/filter_results/", 
+                          geno, "_filtered_RulesFilter_result_classification.txt")
+  }
+
+  # B. Load Files
+  if (!file.exists(diu_path) | !file.exists(bridge_path) | !file.exists(egg_path)) {
+    cat("  [!] Skipping:", geno, "- One or more input files missing.\n")
+    next
+  }
+
+  diu    <- read.csv(diu_path)
+  bridge <- read.delim(bridge_path) %>% dplyr::select(isoform, associated_gene)
+  egg    <- read.delim(egg_path, skip = 4, header = TRUE, sep = "\t", quote = "") %>%
+            dplyr::rename(isoform = X.query)
+
+  # C. Perform Merge
+  # First join gene switches to their isoforms, then add functional data
+  merged_data <- diu %>%
+    inner_join(bridge, by = c("gene_id" = "associated_gene")) %>%
+    left_join(egg, by = "isoform")
+
+  # D. Collapse to Gene Level
+  # This creates 1 line per gene and counts how many isoforms were mapped to it
+  gene_summary <- merged_data %>%
+    group_by(gene_id) %>%
+    summarize(
+      n_isoforms          = n(),
+      isoform_ids         = paste(unique(isoform), collapse = ", "),
+      gene_switch_q_value = first(gene_switch_q_value),
+      Description         = first(Description),
+      Preferred_name      = first(Preferred_name),
+      GOs                 = first(GOs),
+      KEGG_ko             = first(KEGG_ko),
+      PFAMs               = first(PFAMs)
+    ) %>%
+    arrange(gene_switch_q_value)
+
+  # E. Save Output
+  out_name <- paste0(base_dir, geno, "_DIU_gene_summary_annotated.csv")
+  write.csv(gene_summary, out_name, row.names = FALSE)
+  cat("  [+] Success: Saved summary with", nrow(gene_summary), "genes to:", out_name, "\n")
+}
+
+cat("\nAll genotypes processed!\n")
