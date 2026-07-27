@@ -1,0 +1,362 @@
+### Performing principal component analysis (PCA) of grapevine Isoseq samples \
+### PCA based on SNPs against the Cabernet Sauvignon cl. 08 (Vitis vinifera)(CabSav08) phased reference genome for Chromosomes 1 and 2 (both haplotypes)
+### The V. vinifera Cabernet Sauvignon cl. 08 reference genome downloaded from https://grapegenomics.com/pages/VvCabSauv/VvCabSauv08_v2.0/
+
+
+
+### First, align all flnc.bams (full-length non-chimeric reads) to the CabSav08 reference genome using pbmm2 align
+### NOTE: the flnc.bams were provided directly from the UC Davis DNA Technologies and Expression Analysis Core and were generated using PacBio's Isoseq workflow: https://isoseq.how
+
+
+
+# submit bash script for genome alignment
+ 
+#!/bin/bash -l
+#SBATCH --job-name=CabSav08_flnc_align
+#SBATCH --cpus-per-task=6
+#SBATCH --mem=80G
+#SBATCH --time=48:00:00
+#SBATCH --array=1-62
+#SBATCH -p epyc
+#SBATCH --output=logs/CabSav_flnc_%A_%a.out
+#SBATCH --error=logs/CabSav_flnc_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# 1. Environment & Paths
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate "$HOME/.conda/envs/isoseq_run_env"
+
+MANIFEST="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/master_manifest_all_genotypes.tsv"
+REF="/rhome/wcoll010/shared/pacbio/genomes/CabSauv08/VITVvi_vCabSauv08_v2.0.pseudomolecules.mmi"
+OUTPUT_BASE="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/CabSav08_alignments"
+
+# 2. Get Sample Info (Col 1: Name, Col 2: FLNC Path)
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$MANIFEST")
+SAMPLE=$(echo "$LINE" | cut -f1)
+INPUT_FLNC=$(echo "$LINE" | cut -f2)
+
+# 3. Setup Output
+OUTDIR="${OUTPUT_BASE}/${SAMPLE}"
+mkdir -p "$OUTDIR"
+OUT_BAM="${OUTDIR}/${SAMPLE}_vs_CabSav_flnc.bam"
+
+echo "Processing Sample: $SAMPLE"
+echo "Input FLNC: $INPUT_FLNC"
+
+# 4. Run Alignment
+# We use --preset ISOSEQ to handle the long-read splice alignments correctly
+/usr/bin/time -v pbmm2 align "$REF" "$INPUT_FLNC" "$OUT_BAM" \
+    --preset ISOSEQ \
+    --sort \
+    --num-threads "${SLURM_CPUS_PER_TASK}"
+
+# 5. Generate Statistics
+# This creates a text file showing how many reads mapped to the insect genome
+echo "Generating alignment stats..."
+samtools flagstat "$OUT_BAM" > "${OUT_BAM}.stats"
+
+echo "Job for $SAMPLE complete."
+
+
+
+
+
+
+#########
+
+# Alignment data (.bam files) had generic names (BIOSAMPLE 1-5)
+# Need to rename the samples with actual sample ID
+
+# submit bash script
+
+#!/bin/bash
+#SBATCH --time=02:00:00
+#SBATCH --output=rename.out
+#SBATCH --cpus-per-task=1
+#SBATCH --error=rename.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+
+# 1. Load the tool
+module load samtools/1.19.2
+
+# Name file path
+BAM_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/CabSav08_alignments"
+
+
+# 2. Use a precise search to pull sample names
+find "$BAM_DIR" -name "*.bam" | while read -r BAM; do
+    # Pull Sample ID from the directory name
+    SAMPLE=$(basename $(dirname "$BAM"))
+    
+    echo "Processing: $SAMPLE"
+    
+    # We create a temporary header file to ensure the change sticks
+    samtools view -H "$BAM" | sed "s/SM:[^\t]*/SM:${SAMPLE}/" > header.tmp
+    
+    # Re-header the BAM file using the modified header
+    samtools reheader header.tmp "$BAM" > "${BAM}.new"
+    
+    # Check if the new file actually exists and has size before overwriting
+    if [[ -s "${BAM}.new" ]]; then
+        mv "${BAM}.new" "$BAM"
+        samtools index "$BAM"
+        echo "Successfully updated $SAMPLE"
+    else
+        echo "ERROR: Failed to update $SAMPLE"
+    fi
+done
+
+rm -f header.tmp
+
+
+
+
+
+
+
+
+#######
+
+
+### Performing SNP calling with freebayes-parallel
+
+#!/bin/bash -l
+#SBATCH --job-name=SNP_calling
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=120G
+#SBATCH --time=48:00:00
+#SBATCH -p epyc
+#SBATCH --output=logs/snp_calling_%j.out
+#SBATCH --error=logs/snp_calling_%j.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# 1. Load Modules (Using the verified parallel version)
+module load freebayes/1.3.6
+module load samtools/1.19.2
+module load bcftools/1.19
+module load parallel/20220122
+
+
+# 2. Paths
+REF="/rhome/wcoll010/shared/pacbio/genomes/CabSauv08/VITVvi_vCabSauv08_v2.0.pseudomolecules.fasta"
+BAM_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/CabSav08_alignments"
+OUT_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/snp_analysis"
+mkdir -p "$OUT_DIR"
+
+
+# 3. CHUNKING: Generate genomic regions (chunks) to use all 12 CPUs
+# This slices Chr 1 & 2 (both haplotypes) into 100kb pieces (~450 tasks)
+echo "Generating genomic chunks..."
+fasta_generate_regions.py "$REF.fai" 100000 | \
+    grep -E "chr01|chr02" > "$OUT_DIR/parallel_chunks.txt"
+
+
+# 4. Generate BAM list
+find "$BAM_DIR" -name "*.bam" > "$OUT_DIR/joint_bams.list"
+
+
+# 5. Run FreeBayes-Parallel
+
+# This will now efficiently spread the ~450 tasks across 12 CPUs
+# SNP criteria: 
+# must have a minimum mapping quality of 20 and a minimum read depth of 5x
+# an alternate allele was only considered if supported by at least 2 reads comprising ≥ 10% of the total reads at that site. 
+
+echo "Jointly calling SNPs on all samples using 12 CPUs..."
+freebayes-parallel "$OUT_DIR/parallel_chunks.txt" 12 \
+    -f "$REF" \
+    --ploidy 1 \
+    --min-mapping-quality 20 \
+    --min-coverage 5 \
+    --min-alternate-count 2 \
+    --min-alternate-fraction 0.1 \
+    --standard-filters \
+    --dont-left-align-indels \
+    --use-best-n-alleles 4 \
+    --bam-list "$OUT_DIR/joint_bams.list" > "$OUT_DIR/grape_joint_raw.vcf"
+
+# 6. Post-Processing
+# raw variants are filtered to retain only high-confidence sites with a variant quality score (QUAL) > 20 and a total alternate allele count (AC) ≥ 2 across the joint cohort
+ 
+
+echo "Filtering variants..."
+bcftools view -i 'QUAL>20 && AC>=2' "$OUT_DIR/grape_joint_raw.vcf" -Oz -o "$OUT_DIR/grape_pca_final.vcf.gz"
+tabix -p vcf "$OUT_DIR/grape_pca_final.vcf.gz"
+
+echo "Done! Final VCF for PCA: grape_pca_final.vcf.gz"
+
+
+
+
+
+
+
+
+
+
+######
+
+### Use PLINK to prune and pepare SNPs for PCA
+### SNP criteria: 
+### a sliding window of 50 SNPs was utilized, shifting by 5 SNPs per step and remove any variant with a squared correlation coefficient (r 2) greater than 0.2 
+### a sample-level missingness filter was applied to exclude any individuals lacking genotype calls for more than 20% of SNPs
+
+
+# 1. Set up environment in interactive bash session
+srun --mem=60g --cpus-per-task 2 --time=00:40:00 --pty bash -l
+
+module load bcftools/1.22 
+module load plink/1.90b6.25
+
+cd /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/snp_analysis
+
+# 2. Re-filter the VCF to give SNPs unique IDs (Chr:Pos)
+bcftools annotate --set-id '%CHROM:%POS' \
+    /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/snp_analysis/grape_pca_filtered_final.vcf.gz \
+    -Oz -o /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/snp_analysis/grape_pca_unique_ids.vcf.gz
+
+# 3. Pruning SNPs 
+plink --allow-extra-chr \
+      --vcf /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/snp_analysis/grape_pca_unique_ids.vcf.gz \
+      --double-id \
+      --indep-pairwise 50 5 0.2 \
+      --out /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/snp_analysis/pruning_v2
+
+# 4. Run PCA calculation
+plink --allow-extra-chr \
+      --vcf /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/snp_analysis/grape_pca_unique_ids.vcf.gz \
+      --extract /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/snp_analysis/pruning_v2.prune.in \
+      --double-id \
+      --mind 0.2 \
+      --pca 10 \
+      --out /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/snp_analysis/grape_pca_REFINED_v2
+
+# 5,551 variants remaining
+
+
+
+
+
+
+
+
+
+
+#### Plot PCA results
+
+# Activate R and load libraries
+R
+
+library(ggplot2)
+library(ggrepel)
+library(RColorBrewer)
+
+# 1. Load the results
+pca <- read.table("grape_pca_RESULTS_final.eigenvec", header = FALSE)
+eigval <- scan("grape_pca_RESULTS_final.eigenval")
+colnames(pca)[1:4] <- c("FID", "SampleID", "PC1", "PC2")
+pve <- data.frame(PC = 1:10, pve = (eigval/sum(eigval))*100)
+
+# 2. Corrected grouping logic
+# sub("_.*", "", ...) grabs the genotype (e.g., 'sw') from 'sw_inf_R1'
+pca$Genotype <- as.factor(sub("_.*", "", pca$SampleID))
+pca$Treatment <- ifelse(grepl("_con_", pca$SampleID), "Control", "Infested")
+
+# 3. Create PCA plot
+pdf("Grape_Genotype_PCA_final.pdf", width = 14, height = 10)
+
+ggplot(pca, aes(x = PC1, y = PC2, color = Genotype, shape = Treatment)) +
+  geom_point(size = 5, alpha = 0.8) +
+  geom_text_repel(
+    aes(label = SampleID), 
+    size = 2.5, 
+    max.overlaps = Inf,
+    segment.alpha = 0.5
+  ) +
+  scale_color_manual(values = colorRampPalette(brewer.pal(9, "Set1"))(length(levels(pca$Genotype)))) +
+  labs(
+    title = "Final PCA: Corrected Sample Identites",
+    subtitle = "",
+    x = paste0("PC1 (", round(pve$pve[1], 1), "%)"),
+    y = paste0("PC2 (", round(pve$pve[2], 1), "%)")
+  ) +
+  theme_bw()
+
+dev.off()
+
+
+
+
+# make a PCA with PC3 vs PC4
+
+library(ggplot2)
+library(ggrepel)
+library(RColorBrewer)
+
+# 1. Load the results
+# We read up to column 6 now to capture PC3 and PC4
+pca <- read.table("grape_pca_RESULTS_final.eigenvec", header = FALSE)
+eigval <- scan("grape_pca_RESULTS_final.eigenval")
+colnames(pca)[1:6] <- c("FID", "SampleID", "PC1", "PC2", "PC3", "PC4")
+pve <- data.frame(PC = 1:10, pve = (eigval/sum(eigval))*100)
+
+# 2. Corrected grouping logic
+pca$Genotype <- as.factor(sub("_.*", "", pca$SampleID))
+pca$Treatment <- ifelse(grepl("_con_", pca$SampleID), "Control", "Infested")
+
+# Define a consistent palette for both plots
+num_genotypes <- length(levels(pca$Genotype))
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))(num_genotypes)
+
+# 3. Create Multi-Page PDF
+pdf("Grape_Genotype_PC12_PC34_final.pdf", width = 14, height = 10)
+
+# Page 1: PC1 vs PC2
+print(
+  ggplot(pca, aes(x = PC1, y = PC2, color = Genotype, shape = Treatment)) +
+    geom_point(size = 5, alpha = 0.8) +
+    geom_text_repel(aes(label = SampleID), size = 2.5, max.overlaps = Inf, segment.alpha = 0.5) +
+    scale_color_manual(values = getPalette) +
+    labs(
+      title = "Final PCA: PC1 vs PC2",
+      subtitle = "",
+      x = paste0("PC1 (", round(pve$pve[1], 1), "%)"),
+      y = paste0("PC2 (", round(pve$pve[2], 1), "%)")
+    ) +
+    theme_bw()
+)
+
+# Page 2: PC3 vs PC4
+print(
+  ggplot(pca, aes(x = PC3, y = PC4, color = Genotype, shape = Treatment)) +
+    geom_point(size = 5, alpha = 0.8) +
+    geom_text_repel(aes(label = SampleID), size = 2.5, max.overlaps = Inf, segment.alpha = 0.5) +
+    scale_color_manual(values = getPalette) +
+    labs(
+      title = "Final PCA: PC3 vs PC4",
+      subtitle = "",
+      x = paste0("PC3 (", round(pve$pve[3], 1), "%)"),
+      y = paste0("PC4 (", round(pve$pve[4], 1), "%)")
+    ) +
+    theme_bw()
+)
+
+dev.off()
+
+
+
+
+
+
+
+
+
+
