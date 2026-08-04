@@ -1,0 +1,420 @@
+### Gene set enrichment analysis 
+### Question - what KEGG and GO pathways are overrepresented among isoforms that are differentially expressed (DE) or show differential isoform usage (DIU) during phylloxera infestation 
+### For DE analysis, RNA isoforms are collapsed to gene-level (isoforms encoded by the same gene are collapsed/summed based on gene ID) to account for biases based on isoform diversity
+
+
+
+### First, merge annotation data (via eggNog mapper) with differentially expressed isoforms (from Differential_isoform_expression.R)
+### Processing genotype 1616 data
+
+# Set working directory
+cd /rhome/wcoll010/bigdata_groenlab/iso_seq
+
+# Run interactive bash
+srun --mem=40g --cpus-per-task 1 --time=00:20:00 --pty bash -l
+
+# Activate R 
+R
+
+# load R libraries
+library(tidyverse)
+
+# 2. Define Exact Absolute Paths
+up_file   <- "/rhome/wcoll010/bigdata_groenlab/iso_seq/DE_isoforms/1616_upreg_isoforms_final.csv"
+down_file <- "/rhome/wcoll010/bigdata_groenlab/iso_seq/DE_isoforms/1616_downreg_isoforms_final.csv"
+egg_path  <- "/rhome/wcoll010/bigdata_groenlab/iso_seq/eggnog_results/1616_eggnog.emapper.annotations"
+
+# 3. Load eggNOG annotations 
+# Skip 4 lines of comments and rename the query column
+annotations <- read.delim(egg_path, skip = 4, header = TRUE, sep = "\t", quote = "") %>%
+               rename(isoform = X.query)
+
+# 4. Merge and Save UPREGULATED
+if (file.exists(up_file)) {
+  read.csv(up_file) %>%
+    left_join(annotations, by = "isoform") %>%
+    write.csv("1616_upreg_annotated.csv", row.names = FALSE)
+  message(" [+] Successfully created 1616_upreg_annotated.csv in base directory.")
+} else {
+  warning(" [!] Could not find ", up_file)
+}
+
+# 5. Merge and Save DOWNREGULATED
+if (file.exists(down_file)) {
+  read.csv(down_file) %>%
+    left_join(annotations, by = "isoform") %>%
+    write.csv("1616_downreg_annotated.csv", row.names = FALSE)
+  message(" [+] Successfully created 1616_downreg_annotated.csv in base directory.")
+} else {
+  warning(" [!] Could not find ", down_file)
+}
+
+
+
+
+
+# R script for gene-level (isoform collapsed) gene set enrichment 
+
+library(tidyverse)
+library(clusterProfiler)
+library(GO.db)
+library(enrichplot)
+library(ggplot2)
+
+# --- 1. Global Setup ---
+# Isolate the loop to only the genotypes that need to be re-run
+genotypes <- c("SO4", "1616", "1103")
+base_dir  <- "/rhome/wcoll010/bigdata_groenlab/iso_seq/"
+egg_dir   <- paste0(base_dir, "eggnog_results/")
+
+# Create GO Master Map
+go_master_map <- AnnotationDbi::select(GO.db, 
+                                       keys = keys(GO.db), 
+                                       columns = c("GOID", "ONTOLOGY", "TERM"), 
+                                       keytype = "GOID") %>%
+                 dplyr::rename(ID = GOID, Description = TERM)
+
+# --- 2. Main Genotype Loop ---
+for (geno in genotypes) {
+  cat("\n", paste(rep("=", 40), collapse = ""), "\n")
+  cat("PROCESSING GENOTYPE (GENE-LEVEL):", geno, "\n")
+  
+  # A. Load Annotation & Bridge Data (USING FILTERED SQANTI OUTPUT)
+  egg_path    <- paste0(egg_dir, geno, "_eggnog.emapper.annotations")
+  bridge_path <- paste0(base_dir, "sqanti_results/", geno, "_sqanti/filter_results/", geno, "_filtered_RulesFilter_result_classification.txt")
+  
+  if (!file.exists(egg_path)) {
+    cat("  [!] ERROR: Missing eggNOG annotations at", egg_path, "\n")
+    next
+  }
+  if (!file.exists(bridge_path)) {
+    cat("  [!] ERROR: Missing filtered bridge file at", bridge_path, "\n")
+    next
+  }
+
+  # B. Load and Merge Data
+  bridge      <- read.delim(bridge_path) %>% dplyr::select(isoform, associated_gene)
+  full_eggnog <- read.delim(egg_path, skip = 4, header = TRUE, sep = "\t", quote = "") %>%
+                 dplyr::rename(isoform = X.query)
+  
+  gene_annot_map <- bridge %>% inner_join(full_eggnog, by = "isoform")
+
+  # C. Prepare Gene-Level KEGG TERM2GENE
+  KO_universe_gene <- gene_annot_map %>%
+    dplyr::select(KEGG_ko, associated_gene) %>%
+    filter(KEGG_ko != "-" & KEGG_ko != "") %>%
+    mutate(KEGG_ko = gsub("ko:", "", KEGG_ko)) %>%
+    separate_rows(KEGG_ko, sep = ",") %>%
+    distinct()
+
+  KO_names <- gene_annot_map %>%
+    dplyr::select(KEGG_ko, Description) %>%
+    filter(KEGG_ko != "-" & KEGG_ko != "") %>%
+    mutate(KEGG_ko = gsub("ko:", "", KEGG_ko)) %>%
+    separate_rows(KEGG_ko, sep = ",") %>%
+    distinct(KEGG_ko, .keep_all = TRUE) %>%
+    dplyr::rename(ID = KEGG_ko)
+
+  # D. Prepare Gene-Level GO TERM2GENE
+  GO_all_links_gene <- gene_annot_map %>%
+    dplyr::select(GOs, associated_gene) %>%
+    filter(GOs != "-" & GOs != "") %>%
+    separate_rows(GOs, sep = ",") %>%
+    dplyr::rename(ID = GOs) %>%
+    left_join(go_master_map, by = "ID") %>%
+    distinct()
+
+  # --- 3. Directional Loop (Up/Down) ---
+  for (dir in c("upreg", "downreg")) {
+    
+    # Safely handle the S04/SO4 prefix if your previously annotated DE files use the typo
+    file_prefix <- if (geno == "SO4") "S04" else geno
+    
+    # Check standard and typo paths to ensure we grab the file
+    de_file_std <- paste0(base_dir, geno, "_", dir, "_annotated.csv")
+    de_file_typo <- paste0(base_dir, file_prefix, "_", dir, "_annotated.csv")
+    
+    de_file <- if(file.exists(de_file_std)) de_file_std else if(file.exists(de_file_typo)) de_file_typo else NA
+    
+    if (is.na(de_file) || !file.exists(de_file)) {
+      cat("  [!] Skipping: DE file missing for", geno, dir, "\n")
+      next
+    }
+    
+    cat("\n>>> Analyzing:", geno, dir, "using file:", de_file, "\n")
+    de_data <- read.csv(de_file)
+    
+    target_genes <- de_data %>%
+      filter(!is.na(associated_gene)) %>%
+      pull(associated_gene) %>%
+      unique()
+    
+    if (length(target_genes) < 5) {
+      cat("  [!] Too few target genes for enrichment (< 5 genes).\n")
+      next
+    }
+
+    # ----------------------------
+    # KEGG ENRICHMENT (Gene-Level)
+    # ----------------------------
+    k_res <- enricher(gene = target_genes, 
+                      universe = unique(KO_universe_gene$associated_gene),
+                      TERM2GENE = KO_universe_gene, 
+                      TERM2NAME = KO_names,
+                      pvalueCutoff = 0.05, pAdjustMethod = "BH")
+    
+    if (!is.null(k_res) && nrow(as.data.frame(k_res)) > 0) {
+      k_res@result <- k_res@result %>% 
+        filter(Count >= 5) %>%
+        mutate(Description = sub("[.;].*", "", Description)) %>%
+        mutate(Description = stringr::str_trunc(Description, 70))
+      
+      if (nrow(k_res@result) > 0) {
+        file_base <- paste0(base_dir, geno, "_", dir, "_KEGG_geneLevel")
+        write.csv(as.data.frame(k_res), paste0(file_base, "_results.csv"), row.names = FALSE)
+        pdf(paste0(file_base, "_dotplot.pdf"), width = 11, height = if(nrow(k_res@result) < 10) 7 else 9)
+        print(dotplot(k_res, showCategory = 20, label_format = 40) + ggtitle(paste("KEGG (Gene-Level):", geno, dir)) + theme_bw())
+        dev.off()
+        cat("  [+] Saved KEGG results and dotplot PDF.\n")
+      }
+    }
+
+    # ----------------------------
+    # GO ENRICHMENT (Gene-Level)
+    # ----------------------------
+    for (ont in c("BP", "MF", "CC")) {
+      cat("   [+] Running GO", ont, "...\n")
+      ont_univ_gene <- GO_all_links_gene %>% filter(ONTOLOGY == ont) %>% dplyr::select(ID, associated_gene)
+      ont_nms       <- go_master_map %>% filter(ONTOLOGY == ont) %>% dplyr::select(ID, Description)
+      
+      if (nrow(ont_univ_gene) == 0) next
+      
+      go_res <- enricher(gene = target_genes, 
+                         universe = unique(GO_all_links_gene$associated_gene),
+                         TERM2GENE = ont_univ_gene, TERM2NAME = ont_nms,
+                         pvalueCutoff = 0.05, pAdjustMethod = "BH", minGSSize = 5)
+      
+      if (!is.null(go_res) && nrow(as.data.frame(go_res)) > 0) {
+        go_res@result <- go_res@result %>% filter(Count >= 5)
+        if (nrow(go_res@result) > 0) {
+          file_base <- paste0(base_dir, geno, "_", dir, "_GO_", ont, "_geneLevel")
+          write.csv(as.data.frame(go_res), paste0(file_base, "_results.csv"), row.names = FALSE)
+          pdf(paste0(file_base, "_dotplot.pdf"), width = 11, height = if(nrow(go_res@result) < 10) 7 else 9)
+          print(dotplot(go_res, showCategory = 20, label_format = 50) + ggtitle(paste("GO", ont, "(Gene-Level):", geno, dir)) + theme_bw())
+          dev.off()
+          cat("  [+] Saved GO", ont, "results and dotplot PDF.\n")
+        }
+      }
+    }
+  }
+}
+
+cat("\nMaster Gene-Level Analysis Complete for Redo Genotypes!\n")
+
+# save R script as gene_set_enrich_DEI_final.R
+
+
+
+
+
+#!/bin/bash
+#SBATCH --job-name="batch_enrich"
+#SBATCH --output=logs/batch_enrich_%j.out
+#SBATCH --time=06:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=64G
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+# Load R module
+module load R
+
+# Run the batch script
+Rscript gene_set_enrich_DEI_final.R
+
+# save as gene_set_enrich_DEI_final.sh
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Performing gene set enrichment analysis for gene showing differential isoform usage (control vs infested)
+
+library(tidyverse)
+library(clusterProfiler)
+library(GO.db)
+library(enrichplot)
+library(ggplot2)
+
+# --- 1. Global Setup ---
+genotypes <- c("101-14", "1103", "1616", "3309", "5BB", "99R", "cab33", "ripa", "SO4", "sw")
+base_dir  <- "/rhome/wcoll010/bigdata_groenlab/iso_seq/"
+egg_dir   <- paste0(base_dir, "eggnog_results/")
+
+# Create GO Master Map (Explicit namespace)
+go_master_map <- AnnotationDbi::select(GO.db, 
+                                       keys = keys(GO.db), 
+                                       columns = c("GOID", "ONTOLOGY", "TERM"), 
+                                       keytype = "GOID") %>%
+                 dplyr::rename(ID = GOID, Description = TERM)
+
+# --- 2. Main Processing Loop ---
+for (geno in genotypes) {
+  cat("\n", paste(rep("=", 40), collapse = ""), "\n")
+  cat("PROCESSING GENOTYPE FOR DIU ENRICHMENT:", geno, "\n")
+  
+  # A. Define Target DIU File (The newly filtered files)
+  diu_file <- paste0(base_dir, geno, "_DIU_gene_summary_annotated_filtered.csv")
+  
+  if (!file.exists(diu_file)) {
+    cat("  [!] Skipping: Filtered DIU file missing for", geno, "\n")
+    next
+  }
+
+  # B. Define Background Universe Paths (ALL using the standard filtered path)
+  egg_path    <- paste0(egg_dir, geno, "_eggnog.emapper.annotations")
+  bridge_path <- paste0(base_dir, "sqanti_results/", geno, "_sqanti/filter_results/", geno, "_filtered_RulesFilter_result_classification.txt")
+  
+  if (!file.exists(bridge_path) || !file.exists(egg_path)) {
+    cat("  [!] Skipping: Background universe files missing for", geno, "\n")
+    next
+  }
+
+  # C. Load Target DIU Genes
+  diu_data <- read.csv(diu_file)
+  
+  # Note: The DIU files use 'gene_id' instead of 'associated_gene'
+  target_genes <- diu_data %>%
+    filter(!is.na(gene_id)) %>%
+    pull(gene_id) %>%
+    unique()
+  
+  if (length(target_genes) < 5) {
+    cat("  [!] Too few DIU genes for enrichment (< 5 genes) in", geno, "\n")
+    next
+  }
+
+  # D. Load and Merge Data for the Gene-Level Universe
+  bridge      <- read.delim(bridge_path) %>% dplyr::select(isoform, associated_gene)
+  full_eggnog <- read.delim(egg_path, skip = 4, header = TRUE, sep = "\t", quote = "") %>%
+                 dplyr::rename(isoform = X.query)
+  
+  gene_annot_map <- bridge %>% inner_join(full_eggnog, by = "isoform")
+
+  # Prepare Gene-Level KEGG Universe
+  KO_universe_gene <- gene_annot_map %>%
+    dplyr::select(KEGG_ko, associated_gene) %>%
+    filter(KEGG_ko != "-" & KEGG_ko != "") %>%
+    mutate(KEGG_ko = gsub("ko:", "", KEGG_ko)) %>%
+    separate_rows(KEGG_ko, sep = ",") %>%
+    distinct()
+
+  KO_names <- gene_annot_map %>%
+    dplyr::select(KEGG_ko, Description) %>%
+    filter(KEGG_ko != "-" & KEGG_ko != "") %>%
+    mutate(KEGG_ko = gsub("ko:", "", KEGG_ko)) %>%
+    separate_rows(KEGG_ko, sep = ",") %>%
+    distinct(KEGG_ko, .keep_all = TRUE) %>%
+    dplyr::rename(ID = KEGG_ko)
+
+  # Prepare Gene-Level GO Universe
+  GO_all_links_gene <- gene_annot_map %>%
+    dplyr::select(GOs, associated_gene) %>%
+    filter(GOs != "-" & GOs != "") %>%
+    separate_rows(GOs, sep = ",") %>%
+    dplyr::rename(ID = GOs) %>%
+    left_join(go_master_map, by = "ID") %>%
+    distinct()
+
+  # ----------------------------
+  # KEGG ENRICHMENT (DIU)
+  # ----------------------------
+  cat("   [+] Running KEGG Enrichment...\n")
+  k_res <- enricher(gene = target_genes, 
+                    universe = unique(KO_universe_gene$associated_gene),
+                    TERM2GENE = KO_universe_gene, 
+                    TERM2NAME = KO_names,
+                    pvalueCutoff = 0.05, pAdjustMethod = "BH")
+  
+  if (!is.null(k_res) && nrow(as.data.frame(k_res)) > 0) {
+    k_res@result <- k_res@result %>% 
+      filter(Count >= 5) %>%
+      mutate(Description = sub("[.;].*", "", Description)) %>%
+      mutate(Description = stringr::str_trunc(Description, 70))
+    
+    if (nrow(k_res@result) > 0) {
+      file_base <- paste0(base_dir, geno, "_DIU_KEGG_geneLevel")
+      write.csv(as.data.frame(k_res), paste0(file_base, "_results.csv"), row.names = FALSE)
+      pdf(paste0(file_base, "_dotplot.pdf"), width = 11, height = if(nrow(k_res@result) < 10) 7 else 9)
+      print(dotplot(k_res, showCategory = 20, label_format = 40) + ggtitle(paste("KEGG DIU:", geno)) + theme_bw())
+      dev.off()
+    }
+  }
+
+  # ----------------------------
+  # GO ENRICHMENT (DIU)
+  # ----------------------------
+  for (ont in c("BP", "MF", "CC")) {
+    cat("   [+] Running GO", ont, "...\n")
+    ont_univ_gene <- GO_all_links_gene %>% filter(ONTOLOGY == ont) %>% dplyr::select(ID, associated_gene)
+    ont_nms       <- go_master_map %>% filter(ONTOLOGY == ont) %>% dplyr::select(ID, Description)
+    
+    if (nrow(ont_univ_gene) == 0) next
+    
+    go_res <- enricher(gene = target_genes, 
+                       universe = unique(GO_all_links_gene$associated_gene),
+                       TERM2GENE = ont_univ_gene, TERM2NAME = ont_nms,
+                       pvalueCutoff = 0.05, pAdjustMethod = "BH", minGSSize = 5)
+    
+    if (!is.null(go_res) && nrow(as.data.frame(go_res)) > 0) {
+      go_res@result <- go_res@result %>% filter(Count >= 5)
+      if (nrow(go_res@result) > 0) {
+        file_base <- paste0(base_dir, geno, "_DIU_GO_", ont, "_geneLevel")
+        write.csv(as.data.frame(go_res), paste0(file_base, "_results.csv"), row.names = FALSE)
+        pdf(paste0(file_base, "_dotplot.pdf"), width = 11, height = if(nrow(go_res@result) < 10) 7 else 9)
+        print(dotplot(go_res, showCategory = 20, label_format = 50) + ggtitle(paste("GO", ont, "DIU:", geno)) + theme_bw())
+        dev.off()
+      }
+    }
+  }
+}
+cat("\nMaster DIU Enrichment Analysis Complete!\n")
+
+# save as gene_set_enich_DIU.R
+
+
+
+# shell script to the R script
+
+#!/bin/bash
+#SBATCH --job-name="batch_enrich_DIU"
+#SBATCH --output=logs/batch_enrich_DIU_%j.out
+#SBATCH --time=06:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=64G
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+# Load R module
+module load R
+
+# Run the batch script
+Rscript gene_set_enich_DIU.R
+
+
+# save as gene_set_enich_DIU.sh
+
+
+
+###
