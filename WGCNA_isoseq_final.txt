@@ -1,0 +1,4678 @@
+# Pepare gene expression matrix for WGCNA anaylsis
+
+library(tidyverse)
+
+# ============================================================
+# 1. Paths
+# ============================================================
+
+base_dir <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+matrix_dir <- file.path(
+  base_dir,
+  "oarfish_matrices_by_genotype"
+)
+
+sqanti_file <- file.path(
+  base_dir,
+  "sqanti_results",
+  "Vrip_X_Vrup_sqanti",
+  "filter_results",
+  "Vrip_X_Vrup_filtered_RulesFilter_result_classification.txt"
+)
+
+genotypes <- c(
+  "101-14",
+  "3309",
+  "sw"
+)
+
+
+# ============================================================
+# 2. Read genotype Oarfish matrices
+# ============================================================
+
+read_matrix <- function(geno) {
+
+  f <- file.path(
+    matrix_dir,
+    paste0(
+      geno,
+      "_oarfish_counts.tsv"
+    )
+  )
+
+  if (!file.exists(f)) {
+    stop(
+      "Missing matrix:\n",
+      f
+    )
+  }
+
+  x <- read.delim(
+    f,
+    header = TRUE,
+    row.names = 1,
+    check.names = FALSE
+  )
+
+  cat("\n============================================================\n")
+  cat("GENOTYPE:", geno, "\n")
+  cat("============================================================\n")
+
+  cat(
+    "Isoforms:",
+    nrow(x),
+    "\n"
+  )
+
+  cat(
+    "Samples:",
+    ncol(x),
+    "\n"
+  )
+
+  cat("Sample names:\n")
+  print(
+    colnames(x)
+  )
+
+  return(x)
+}
+
+
+mat_list <- lapply(
+  genotypes,
+  read_matrix
+)
+
+names(mat_list) <- genotypes
+
+
+# ============================================================
+# 3. Check for duplicated sample names
+# ============================================================
+
+all_sample_names <- unlist(
+  lapply(
+    mat_list,
+    colnames
+  )
+)
+
+if (anyDuplicated(all_sample_names) > 0) {
+
+  stop(
+    "Duplicate sample names found across genotype matrices."
+  )
+}
+
+
+cat("\n============================================================\n")
+cat("SAMPLE SUMMARY\n")
+cat("============================================================\n")
+
+for (geno in genotypes) {
+
+  cat(
+    geno,
+    ":",
+    ncol(mat_list[[geno]]),
+    "samples\n"
+  )
+}
+
+cat(
+  "TOTAL:",
+  length(all_sample_names),
+  "samples\n"
+)
+
+
+# ============================================================
+# 4. Combine matrices by isoform
+#
+# These should all use the same Vrip_X_Vrup catalog.
+# ============================================================
+
+all_isoforms <- Reduce(
+  union,
+  lapply(
+    mat_list,
+    rownames
+  )
+)
+
+cat(
+  "\nUnique isoform IDs across all three matrices:",
+  length(all_isoforms),
+  "\n"
+)
+
+
+expand_matrix <- function(x, all_ids) {
+
+  out <- matrix(
+    0,
+    nrow = length(all_ids),
+    ncol = ncol(x),
+    dimnames = list(
+      all_ids,
+      colnames(x)
+    )
+  )
+
+  out[
+    rownames(x),
+  ] <- as.matrix(x)
+
+  out
+}
+
+
+expanded <- lapply(
+  mat_list,
+  expand_matrix,
+  all_ids = all_isoforms
+)
+
+
+isoform_counts <- do.call(
+  cbind,
+  expanded
+)
+
+
+cat(
+  "Combined isoform matrix:",
+  nrow(isoform_counts),
+  "isoforms x",
+  ncol(isoform_counts),
+  "samples\n"
+)
+
+
+# ============================================================
+# 5. Read current SQANTI classification
+# ============================================================
+
+sqanti <- read.delim(
+  sqanti_file,
+  header = TRUE,
+  sep = "\t",
+  quote = "",
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+
+sqanti_keep <- sqanti %>%
+
+  dplyr::filter(
+    filter_result == "Isoform"
+  ) %>%
+
+  dplyr::select(
+    isoform,
+    associated_gene
+  ) %>%
+
+  dplyr::filter(
+    !is.na(associated_gene),
+    associated_gene != ""
+  ) %>%
+
+  dplyr::distinct()
+
+
+cat(
+  "\nSQANTI-retained isoforms with associated genes:",
+  nrow(sqanti_keep),
+  "\n"
+)
+
+cat(
+  "Unique SQANTI-retained genes:",
+  dplyr::n_distinct(
+    sqanti_keep$associated_gene
+  ),
+  "\n"
+)
+
+
+# ============================================================
+# 6. Keep only SQANTI-retained isoforms
+# ============================================================
+
+common_isoforms <- intersect(
+  rownames(isoform_counts),
+  sqanti_keep$isoform
+)
+
+
+cat(
+  "Oarfish isoforms also retained by SQANTI:",
+  length(common_isoforms),
+  "\n"
+)
+
+
+isoform_counts <- isoform_counts[
+  common_isoforms,
+  ,
+  drop = FALSE
+]
+
+
+# ============================================================
+# 7. Map isoforms -> genes
+# ============================================================
+
+isoform_df <- as.data.frame(
+  isoform_counts
+) %>%
+
+  tibble::rownames_to_column(
+    "isoform"
+  )
+
+
+isoform_df <- isoform_df %>%
+
+  dplyr::left_join(
+    sqanti_keep,
+    by = "isoform"
+  )
+
+
+# ============================================================
+# 8. Collapse isoforms to gene-level counts
+# ============================================================
+
+gene_counts_df <- isoform_df %>%
+
+  dplyr::filter(
+    !is.na(associated_gene),
+    associated_gene != ""
+  ) %>%
+
+  dplyr::select(
+    associated_gene,
+    dplyr::all_of(
+      all_sample_names
+    )
+  ) %>%
+
+  dplyr::group_by(
+    associated_gene
+  ) %>%
+
+  dplyr::summarise(
+    dplyr::across(
+      dplyr::everything(),
+      sum,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+
+gene_counts <- gene_counts_df %>%
+
+  tibble::column_to_rownames(
+    "associated_gene"
+  ) %>%
+
+  as.matrix()
+
+
+cat(
+  "\nGene-level matrix:",
+  nrow(gene_counts),
+  "genes x",
+  ncol(gene_counts),
+  "samples\n"
+)
+
+
+# ============================================================
+# 9. FPM
+# ============================================================
+
+library(edgeR)
+
+fpm_mat <- edgeR::cpm(
+  gene_counts
+)
+
+
+# ============================================================
+# 10. Compare candidate filters
+# ============================================================
+
+keep_01_2 <- rowSums(
+  fpm_mat > 0.1
+) >= 2
+
+keep_01_3 <- rowSums(
+  fpm_mat > 0.1
+) >= 3
+
+keep_05_2 <- rowSums(
+  fpm_mat > 0.5
+) >= 2
+
+
+cat("\n============================================================\n")
+cat("FILTER COMPARISON\n")
+cat("============================================================\n")
+
+cat(
+  "Genes before filtering:",
+  nrow(gene_counts),
+  "\n"
+)
+
+cat(
+  "FPM > 0.1 in >=2 samples:",
+  sum(keep_01_2),
+  "\n"
+)
+
+cat(
+  "FPM > 0.1 in >=3 samples:",
+  sum(keep_01_3),
+  "\n"
+)
+
+cat(
+  "FPM > 0.5 in >=2 samples:",
+  sum(keep_05_2),
+  "\n"
+)
+
+
+cat("\n============================================================\n")
+cat("DIAGNOSTIC COMPLETE\n")
+cat("============================================================\n")
+
+# results 
+
+101-14 : 6 samples 3309 : 5 samples sw : 6 samples Unique isoform IDs across all three matrices: 1674716  Combined isoform matrix: 1674716 isoforms x 17 samples Unique SQANTI-retained genes: 58147  Oarfish isoforms also retained by SQANTI: 897880  Genes before filtering: 58147  >  > cat( +   "FPM > 0.1 in >=2 samples:", +   sum(keep_01_2), +   "\n" + ) FPM > 0.1 in >=2 samples: 44996  >  > cat( +   "FPM > 0.1 in >=3 samples:", +   sum(keep_01_3), +   "\n" + ) FPM > 0.1 in >=3 samples: 43025  >  > cat( +   "FPM > 0.5 in >=2 samples:", +   sum(keep_05_2), +   "\n" + ) FPM > 0.5 in >=2 samples: 36543 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### construct signed newtwork using blockwise , but in single block (reduce memory usage)
+
+
+#!/usr/bin/env Rscript
+
+library(tidyverse)
+library(edgeR)
+library(DESeq2)
+library(WGCNA)
+
+options(stringsAsFactors = FALSE)
+
+# ============================================================
+# 1. Paths
+# ============================================================
+
+base_dir <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+matrix_dir <- file.path(
+  base_dir,
+  "oarfish_matrices_by_genotype"
+)
+
+sqanti_file <- file.path(
+  base_dir,
+  "sqanti_results",
+  "Vrip_X_Vrup_sqanti",
+  "filter_results",
+  "Vrip_X_Vrup_filtered_RulesFilter_result_classification.txt"
+)
+
+out_dir <- file.path(
+  base_dir,
+  "WGCNA_Vrip_X_Vrup"
+)
+
+dir.create(
+  out_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+genotypes <- c(
+  "101-14",
+  "3309",
+  "sw"
+)
+
+
+# ============================================================
+# 2. Read Oarfish matrices
+# ============================================================
+
+read_oarfish <- function(geno) {
+
+  f <- file.path(
+    matrix_dir,
+    paste0(geno, "_oarfish_counts.tsv")
+  )
+
+  x <- read.delim(
+    f,
+    header = TRUE,
+    row.names = 1,
+    check.names = FALSE
+  )
+
+  as.matrix(x)
+}
+
+
+mat_list <- lapply(
+  genotypes,
+  read_oarfish
+)
+
+names(mat_list) <- genotypes
+
+
+cat("\nSample numbers:\n")
+
+for (geno in genotypes) {
+
+  cat(
+    geno,
+    ":",
+    ncol(mat_list[[geno]]),
+    "\n"
+  )
+}
+
+
+# ============================================================
+# 3. Combine matrices by isoform
+# ============================================================
+
+all_isoforms <- Reduce(
+  union,
+  lapply(mat_list, rownames)
+)
+
+
+expand_matrix <- function(x, ids) {
+
+  out <- matrix(
+    0,
+    nrow = length(ids),
+    ncol = ncol(x),
+    dimnames = list(
+      ids,
+      colnames(x)
+    )
+  )
+
+  out[rownames(x), ] <- x
+
+  out
+}
+
+
+expanded <- lapply(
+  mat_list,
+  expand_matrix,
+  ids = all_isoforms
+)
+
+
+isoform_counts <- do.call(
+  cbind,
+  expanded
+)
+
+
+cat(
+  "\nCombined isoform matrix:",
+  nrow(isoform_counts),
+  "x",
+  ncol(isoform_counts),
+  "\n"
+)
+
+
+# Combined isoform matrix: 1674716 x 17 
+
+
+# ============================================================
+# 4. Current SQANTI retained isoforms
+# ============================================================
+
+sqanti <- read.delim(
+  sqanti_file,
+  header = TRUE,
+  sep = "\t",
+  quote = "",
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+
+sqanti_keep <- sqanti %>%
+
+  dplyr::filter(
+    filter_result == "Isoform",
+    !is.na(associated_gene),
+    associated_gene != ""
+  ) %>%
+
+  dplyr::select(
+    isoform,
+    associated_gene
+  ) %>%
+
+  dplyr::distinct()
+
+
+common_isoforms <- intersect(
+  rownames(isoform_counts),
+  sqanti_keep$isoform
+)
+
+
+isoform_counts <- isoform_counts[
+  common_isoforms,
+  ,
+  drop = FALSE
+]
+
+
+cat(
+  "SQANTI-retained Oarfish isoforms:",
+  nrow(isoform_counts),
+  "\n"
+)
+
+# SQANTI-retained Oarfish isoforms: 897880 
+
+
+# ============================================================
+# 5. Collapse isoforms -> associated_gene
+# ============================================================
+
+isoform_df <- as.data.frame(
+  isoform_counts
+) %>%
+
+  tibble::rownames_to_column(
+    "isoform"
+  ) %>%
+
+  dplyr::left_join(
+    sqanti_keep,
+    by = "isoform"
+  )
+
+
+sample_names <- colnames(
+  isoform_counts
+)
+
+
+gene_counts_df <- isoform_df %>%
+
+  dplyr::filter(
+    !is.na(associated_gene),
+    associated_gene != ""
+  ) %>%
+
+  dplyr::select(
+    associated_gene,
+    dplyr::all_of(sample_names)
+  ) %>%
+
+  dplyr::group_by(
+    associated_gene
+  ) %>%
+
+  dplyr::summarise(
+    dplyr::across(
+      dplyr::everything(),
+      sum,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+
+gene_counts <- gene_counts_df %>%
+
+  tibble::column_to_rownames(
+    "associated_gene"
+  ) %>%
+
+  as.matrix()
+
+
+cat(
+  "\nGenes before filtering:",
+  nrow(gene_counts),
+  "\n"
+)
+
+# Genes before filtering: 58147 
+
+# ============================================================
+# 6. Expression filter
+#
+# SAME criterion used in current DE workflow:
+#
+# FPM > 0.1 in >=2 samples
+# ============================================================
+
+fpm_mat <- edgeR::cpm(
+  gene_counts
+)
+
+
+keep <- rowSums(
+  fpm_mat > 0.1
+) >= 2
+
+
+gene_counts_filtered <- gene_counts[
+  keep,
+  ,
+  drop = FALSE
+]
+
+
+cat(
+  "Genes after FPM >0.1 in >=2 samples:",
+  nrow(gene_counts_filtered),
+  "\n"
+)
+
+
+# Genes after FPM >0.1 in >=2 samples: 44996 
+
+
+# ============================================================
+# 7. DESeq2 VST
+#
+# Oarfish values are fractional.
+# DESeq2 requires integer input, so round after gene-level
+# summation.
+#
+# design = ~1 because this transformation is for an
+# unsupervised co-expression network.
+# ============================================================
+
+gene_counts_integer <- round(
+  gene_counts_filtered
+)
+
+storage.mode(
+  gene_counts_integer
+) <- "integer"
+
+
+sample_metadata <- data.frame(
+  row.names = colnames(gene_counts_integer),
+  sample = colnames(gene_counts_integer)
+)
+
+
+dds <- DESeqDataSetFromMatrix(
+
+  countData = gene_counts_integer,
+
+  colData = sample_metadata,
+
+  design = ~ 1
+)
+
+
+vsd <- vst(
+  dds,
+  blind = TRUE
+)
+
+
+expr_normalized <- assay(
+  vsd
+)
+
+
+cat(
+  "\nVST matrix:",
+  nrow(expr_normalized),
+  "genes x",
+  ncol(expr_normalized),
+  "samples\n"
+)
+
+
+# ============================================================
+# 8. WGCNA orientation
+#
+# rows = samples
+# columns = genes
+# ============================================================
+
+datExpr <- t(
+  expr_normalized
+)
+
+
+cat(
+  "WGCNA datExpr:",
+  nrow(datExpr),
+  "samples x",
+  ncol(datExpr),
+  "genes\n"
+)
+
+
+# ============================================================
+# 9. WGCNA quality check
+# ============================================================
+
+gsg <- goodSamplesGenes(
+  datExpr,
+  verbose = 3
+)
+
+
+cat(
+  "\ngoodSamplesGenes allOK:",
+  gsg$allOK,
+  "\n"
+)
+
+
+if (!gsg$allOK) {
+
+  cat(
+    "Removing bad samples/genes detected by WGCNA.\n"
+  )
+
+  datExpr <- datExpr[
+    gsg$goodSamples,
+    gsg$goodGenes
+  ]
+}
+
+
+cat(
+  "Final datExpr:",
+  nrow(datExpr),
+  "samples x",
+  ncol(datExpr),
+  "genes\n"
+)
+
+# Final datExpr: 17 samples x 44996 genes
+
+# ============================================================
+# 10. Sample clustering
+# ============================================================
+
+sampleTree <- hclust(
+  dist(datExpr),
+  method = "average"
+)
+
+
+pdf(
+  file.path(
+    out_dir,
+    "sample_clustering.pdf"
+  ),
+  width = 12,
+  height = 7
+)
+
+plot(
+  sampleTree,
+  main = "Sample clustering",
+  xlab = "",
+  sub = ""
+)
+
+dev.off()
+
+
+# ============================================================
+# 11. Save WGCNA input
+# ============================================================
+
+save(
+  datExpr,
+  expr_normalized,
+  gene_counts_filtered,
+  sample_metadata,
+  file = file.path(
+    out_dir,
+    "WGCNA_input_Vrip_X_Vrup.RData"
+  )
+)
+
+
+
+
+
+
+
+
+
+
+
+
+# ============================================================
+# SIGNED WGCNA WORKFLOW
+# Vrip_X_Vrup: 101-14 + 3309 + sw
+# Gene-level network
+# Signed network, soft power = 16
+# ============================================================
+
+library(WGCNA)
+library(pheatmap)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(writexl)
+
+options(stringsAsFactors = FALSE)
+
+allowWGCNAThreads(nThreads = 12)
+
+
+# ============================================================
+# 0. Paths
+# ============================================================
+
+BASE <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+INPUT_FILE <- file.path(
+  BASE,
+  "WGCNA_Vrip_X_Vrup",
+  "WGCNA_input_Vrip_X_Vrup.RData"
+)
+
+OUT_DIR <- file.path(
+  BASE,
+  "WGCNA_Vrip_X_Vrup",
+  "signed_network"
+)
+
+dir.create(
+  OUT_DIR,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+
+# ============================================================
+# 1. Load prepared expression matrix
+# ============================================================
+
+load(INPUT_FILE)
+
+cat("\nObjects loaded:\n")
+print(ls())
+
+cat("\ndatExpr dimensions:\n")
+print(dim(datExpr))
+
+input_mat <- datExpr
+
+cat(
+  "\nInput matrix:",
+  nrow(input_mat),
+  "samples x",
+  ncol(input_mat),
+  "genes\n"
+)
+
+
+# ============================================================
+# 2. Check samples and genes
+# ============================================================
+
+gsg <- goodSamplesGenes(
+  input_mat,
+  verbose = 3
+)
+
+if (!gsg$allOK) {
+
+  cat("\nRemoving bad samples/genes...\n")
+
+  if (sum(!gsg$goodGenes) > 0) {
+    cat("Bad genes:", sum(!gsg$goodGenes), "\n")
+  }
+
+  if (sum(!gsg$goodSamples) > 0) {
+    cat("Bad samples:", sum(!gsg$goodSamples), "\n")
+  }
+
+  input_mat <- input_mat[
+    gsg$goodSamples,
+    gsg$goodGenes
+  ]
+}
+
+cat(
+  "\nFinal matrix:",
+  nrow(input_mat),
+  "samples x",
+  ncol(input_mat),
+  "genes\n"
+)
+
+
+# ============================================================
+# 3. Signed soft-threshold analysis
+# ============================================================
+
+powers <- c(
+  1:10,
+  seq(12, 30, by = 2)
+)
+
+sft_signed <- pickSoftThreshold(
+  input_mat,
+  powerVector = powers,
+  networkType = "signed",
+  verbose = 5
+)
+
+
+# ============================================================
+# 4. Save soft-threshold results
+# ============================================================
+
+write.csv(
+  sft_signed$fitIndices,
+  file.path(
+    OUT_DIR,
+    "signed_soft_threshold_fit_indices.csv"
+  ),
+  row.names = FALSE
+)
+
+save(
+  sft_signed,
+  powers,
+  file = file.path(
+    OUT_DIR,
+    "signed_soft_threshold_results.RData"
+  )
+)
+
+
+# ============================================================
+# 5. Plot soft-threshold results
+# ============================================================
+
+signed_R2 <-
+  -sign(sft_signed$fitIndices[, 3]) *
+  sft_signed$fitIndices[, 2]
+
+pdf(
+  file.path(
+    OUT_DIR,
+    "signed_soft_threshold_plots.pdf"
+  ),
+  width = 10,
+  height = 5
+)
+
+par(mfrow = c(1, 2))
+
+plot(
+  sft_signed$fitIndices[, 1],
+  signed_R2,
+  xlab = "Soft Threshold (power)",
+  ylab = "Scale Free Topology Model Fit, signed R^2",
+  main = "Scale independence",
+  type = "n"
+)
+
+text(
+  sft_signed$fitIndices[, 1],
+  signed_R2,
+  labels = sft_signed$fitIndices[, 1],
+  cex = 0.9,
+  col = "red"
+)
+
+abline(
+  h = 0.85,
+  col = "red"
+)
+
+plot(
+  sft_signed$fitIndices[, 1],
+  sft_signed$fitIndices[, 5],
+  xlab = "Soft Threshold (power)",
+  ylab = "Mean Connectivity",
+  main = "Mean connectivity",
+  type = "n"
+)
+
+text(
+  sft_signed$fitIndices[, 1],
+  sft_signed$fitIndices[, 5],
+  labels = sft_signed$fitIndices[, 1],
+  cex = 0.9,
+  col = "red"
+)
+
+dev.off()
+
+
+# ============================================================
+# 6. Set selected signed soft power
+# ============================================================
+
+softPower <- 16
+
+cat(
+  "\nUsing signed soft-threshold power:",
+  softPower,
+  "\n"
+)
+
+
+# ============================================================
+# 7. Build signed adjacency matrix
+# ============================================================
+
+adjacency_mat <- adjacency(
+  input_mat,
+  power = softPower,
+  type = "signed"
+)
+
+cat("\nAdjacency matrix complete.\n")
+
+
+# ============================================================
+# 8. Convert adjacency to signed TOM
+# ============================================================
+
+TOM <- TOMsimilarity(
+  adjacency_mat,
+  TOMType = "signed"
+)
+
+rm(adjacency_mat)
+gc()
+
+
+# ============================================================
+# 9. TOM dissimilarity
+# ============================================================
+
+dissTOM <- 1 - TOM
+
+rm(TOM)
+gc()
+
+
+# ============================================================
+# 10. Hierarchical clustering
+# ============================================================
+
+geneTree <- hclust(
+  as.dist(dissTOM),
+  method = "average"
+)
+
+
+# ============================================================
+# 11. Plot gene dendrogram
+# ============================================================
+
+pdf(
+  file.path(
+    OUT_DIR,
+    "signed_power16_gene_dendrogram.pdf"
+  ),
+  width = 12,
+  height = 9
+)
+
+plot(
+  geneTree,
+  xlab = "",
+  sub = "",
+  main = "Gene clustering on signed TOM-based dissimilarity",
+  labels = FALSE,
+  hang = 0.04
+)
+
+dev.off()
+
+
+# ============================================================
+# 12. Dynamic tree cut
+# ============================================================
+
+minModuleSize <- 20
+
+dynamicMods <- cutreeDynamic(
+  dendro = geneTree,
+  distM = dissTOM,
+  deepSplit = 2,
+  pamRespectsDendro = FALSE,
+  minClusterSize = minModuleSize
+)
+
+cat("\nModule labels:\n")
+print(
+  sort(
+    table(dynamicMods),
+    decreasing = TRUE
+  )
+)
+
+
+# ============================================================
+# 13. Convert module numbers to WGCNA colors
+# ============================================================
+
+dynamicColors <- labels2colors(
+  dynamicMods
+)
+
+# No module merging
+mergedColors <- dynamicColors
+
+cat("\nModule sizes:\n")
+print(
+  sort(
+    table(dynamicColors),
+    decreasing = TRUE
+  )
+)
+
+cat(
+  "\nNumber of modules excluding grey:",
+  length(
+    setdiff(
+      unique(dynamicColors),
+      "grey"
+    )
+  ),
+  "\n"
+)
+
+
+# ============================================================
+# 14. Plot dendrogram + module colors
+# ============================================================
+
+pdf(
+  file.path(
+    OUT_DIR,
+    "signed_power16_gene_dendrogram_module_colors.pdf"
+  ),
+  width = 12,
+  height = 7
+)
+
+plotDendroAndColors(
+  geneTree,
+  dynamicColors,
+  "Dynamic Tree Cut",
+  dendroLabels = FALSE,
+  hang = 0.03,
+  addGuide = TRUE,
+  guideHang = 0.05,
+  main = "Gene dendrogram and module colors"
+)
+
+dev.off()
+
+
+# ============================================================
+# 15. Calculate module eigengenes
+# ============================================================
+
+MEList <- moduleEigengenes(
+  input_mat,
+  colors = dynamicColors
+)
+
+MEs <- MEList$eigengenes
+
+MEs <- orderMEs(MEs)
+
+cat("\nModule eigengenes:\n")
+print(colnames(MEs))
+
+
+# ============================================================
+# 16. Cluster module eigengenes
+# ============================================================
+
+MEDiss <- 1 - cor(MEs)
+
+METree <- hclust(
+  as.dist(MEDiss),
+  method = "average"
+)
+
+pdf(
+  file.path(
+    OUT_DIR,
+    "signed_power16_module_eigengene_clustering.pdf"
+  ),
+  width = 8,
+  height = 7
+)
+
+plot(
+  METree,
+  main = "Clustering of module eigengenes",
+  xlab = "",
+  sub = "",
+  cex = 0.6
+)
+
+dev.off()
+
+
+# ============================================================
+# 17. Gene-module assignment table
+# ============================================================
+
+gene_module_df <- data.frame(
+  associated_gene = colnames(input_mat),
+  ModuleNumber = dynamicMods,
+  ModuleAssignment = dynamicColors,
+  stringsAsFactors = FALSE
+)
+
+write.table(
+  gene_module_df,
+  file.path(
+    OUT_DIR,
+    "signed_power16_gene_module_assignments.tsv"
+  ),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+writexl::write_xlsx(
+  gene_module_df,
+  file.path(
+    OUT_DIR,
+    "signed_power16_gene_module_assignments.xlsx"
+  )
+)
+
+
+# ============================================================
+# 18. Export module eigengenes
+# ============================================================
+
+MEs_export <- data.frame(
+  SampleID = rownames(MEs),
+  MEs,
+  check.names = FALSE
+)
+
+write.table(
+  MEs_export,
+  file.path(
+    OUT_DIR,
+    "signed_power16_module_eigengenes.tsv"
+  ),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+writexl::write_xlsx(
+  MEs_export,
+  file.path(
+    OUT_DIR,
+    "signed_power16_module_eigengenes.xlsx"
+  )
+)
+
+
+# ============================================================
+# 19. Save module size table
+# ============================================================
+
+module_size_df <- as.data.frame(
+  table(dynamicColors),
+  stringsAsFactors = FALSE
+)
+
+colnames(module_size_df) <- c(
+  "Module",
+  "GeneCount"
+)
+
+module_size_df <- module_size_df[
+  order(
+    module_size_df$GeneCount,
+    decreasing = TRUE
+  ),
+]
+
+write.table(
+  module_size_df,
+  file.path(
+    OUT_DIR,
+    "signed_power16_module_sizes.tsv"
+  ),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+
+# ============================================================
+# 20. Prepare heatmap matrix
+# ============================================================
+
+MEs0 <- orderMEs(MEs)
+
+module_order <- names(MEs0) %>%
+  gsub("^ME", "", .)
+
+MEs_plot <- MEs0
+
+MEs_plot$treatment <- rownames(MEs_plot)
+
+mME <- MEs_plot %>%
+  pivot_longer(
+    -treatment,
+    names_to = "name",
+    values_to = "value"
+  ) %>%
+  mutate(
+    name = gsub("^ME", "", name),
+    name = factor(
+      name,
+      levels = module_order
+    )
+  )
+
+heatmap_data <- mME %>%
+  pivot_wider(
+    names_from = treatment,
+    values_from = value
+  ) %>%
+  column_to_rownames("name") %>%
+  as.matrix()
+
+
+# ============================================================
+# 21. Heatmap 1: automatically clustered samples
+# ============================================================
+
+pdf(
+  file.path(
+    OUT_DIR,
+    "signed_power16_ME_heatmap_clustered_samples.pdf"
+  ),
+  width = 12,
+  height = 10
+)
+
+pheatmap(
+  heatmap_data,
+  border_color = NA,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+  color = colorRampPalette(
+    c("blue", "white", "red")
+  )(50),
+  fontsize_row = 5,
+  fontsize_col = 9,
+  main = "Signed Power 16 Module Eigengene vs Sample"
+)
+
+dev.off()
+
+
+# ============================================================
+# 22. Define manual sample order
+# ============================================================
+
+target_sample_order <- c(
+
+  # 101-14
+  "101-14_con_R1",
+  "101-14_con_R2",
+  "101-14_con_R3",
+  "101-14_inf_R1",
+  "101-14_inf_R2",
+  "101-14_inf_R3",
+
+  # 3309
+  "3309_con_R1",
+  "3309_con_R2",
+  "3309_con_R3",
+  "3309_inf_R1",
+  "3309_inf_R2",
+
+  # sw
+  "sw_con_R1",
+  "sw_con_R2",
+  "sw_con_R3",
+  "sw_inf_R1",
+  "sw_inf_R2",
+  "sw_inf_R3"
+)
+
+heatmap_data_ordered <- heatmap_data[
+  ,
+  target_sample_order,
+  drop = FALSE
+]
+
+
+# ============================================================
+# 23. Sample annotations
+# ============================================================
+
+col_annotations <- data.frame(
+
+  Genotype = c(
+    rep("101-14", 6),
+    rep("3309", 5),
+    rep("sw", 6)
+  ),
+
+  Treatment = c(
+    rep("Control", 3),
+    rep("Infested", 3),
+
+    rep("Control", 3),
+    rep("Infested", 2),
+
+    rep("Control", 3),
+    rep("Infested", 3)
+  )
+)
+
+rownames(col_annotations) <- target_sample_order
+
+
+# ============================================================
+# 24. Heatmap 2: manually ordered samples
+# ============================================================
+
+pdf(
+  file.path(
+    OUT_DIR,
+    "signed_power16_ME_heatmap_manual_sample_order.pdf"
+  ),
+  width = 12,
+  height = 10
+)
+
+pheatmap(
+  heatmap_data_ordered,
+  border_color = NA,
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  annotation_col = col_annotations,
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+  color = colorRampPalette(
+    c("blue", "white", "red")
+  )(50),
+  fontsize_row = 5,
+  fontsize_col = 9,
+  main = "Signed Power 16 Module Eigengenes Grouped by Genotype & Treatment"
+)
+
+dev.off()
+
+
+# ============================================================
+# 25. Export heatmap matrix
+# ============================================================
+
+write.table(
+  heatmap_data,
+  file.path(
+    OUT_DIR,
+    "signed_power16_ME_heatmap_matrix.tsv"
+  ),
+  sep = "\t",
+  quote = FALSE,
+  col.names = NA
+)
+
+
+# ============================================================
+# 26. Save final compact RData
+# ============================================================
+
+rm(dissTOM)
+gc()
+
+save(
+  MEs,
+  MEList,
+  dynamicMods,
+  dynamicColors,
+  mergedColors,
+  geneTree,
+  METree,
+  gene_module_df,
+  module_size_df,
+  softPower,
+  file = file.path(
+    OUT_DIR,
+    "Vrip_X_Vrup_signed_power16_WGCNA.RData"
+  )
+)
+
+
+# ============================================================
+# 27. Final summary
+# ============================================================
+
+cat("\n============================================================\n")
+cat("SIGNED WGCNA WORKFLOW COMPLETE\n")
+cat("============================================================\n")
+
+cat(
+  "Samples:",
+  nrow(input_mat),
+  "\n"
+)
+
+cat(
+  "Genes:",
+  ncol(input_mat),
+  "\n"
+)
+
+cat(
+  "Soft power:",
+  softPower,
+  "\n"
+)
+
+cat(
+  "Modules excluding grey:",
+  length(
+    setdiff(
+      unique(dynamicColors),
+      "grey"
+    )
+  ),
+  "\n"
+)
+
+cat(
+  "Grey genes:",
+  sum(dynamicColors == "grey"),
+  "\n"
+)
+
+cat(
+  "Output directory:",
+  OUT_DIR,
+  "\n"
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Write file with gene module assignment 
+
+library(writexl)
+
+BASE <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/WGCNA_Vrip_X_Vrup"
+
+SIGNED_RDATA <- file.path(
+  BASE,
+  "signed_network",
+  "Vrip_X_Vrup_signed_power16_WGCNA.RData"
+)
+
+OUT_FILE <- file.path(
+  BASE,
+  "signed_network",
+  "signed_power16_gene_module_assignments.xlsx"
+)
+
+load(SIGNED_RDATA)
+
+# Inspect before export
+dim(gene_module_df)
+head(gene_module_df)
+
+# Export
+writexl::write_xlsx(
+  gene_module_df,
+  OUT_FILE
+)
+
+cat("Saved:\n", OUT_FILE, "\n")
+
+
+
+
+
+
+
+
+
+### Perform linear regression analysis
+
+# ============================================================
+# SIGNED WGCNA: MODULE EIGENGENE REGRESSION 
+# ============================================================
+
+library(WGCNA)
+library(dplyr)
+library(car)
+library(writexl)
+
+BASE <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/WGCNA_Vrip_X_Vrup"
+
+RDATA_FILE <- file.path(
+  BASE,
+  "signed_network",
+  "Vrip_X_Vrup_signed_power16_WGCNA.RData"
+)
+
+OUT_DIR <- file.path(
+  BASE,
+  "signed_network"
+)
+
+
+# ============================================================
+# 1. Load completed signed network
+# ============================================================
+
+load(RDATA_FILE)
+
+MEs_analysis <- orderMEs(MEs)
+
+sample_names <- rownames(MEs_analysis)
+
+
+# ============================================================
+# 2. Build sample metadata
+# ============================================================
+
+metadata <- data.frame(
+  SampleID = sample_names,
+
+  Genotype = dplyr::case_when(
+    grepl("^101-14_", sample_names) ~ "101-14",
+    grepl("^3309_", sample_names) ~ "3309",
+    grepl("^sw_", sample_names, ignore.case = TRUE) ~ "sw",
+    TRUE ~ NA_character_
+  ),
+
+  Treatment = dplyr::case_when(
+    grepl("_con_", sample_names) ~ "Control",
+    grepl("_inf_", sample_names) ~ "Infested",
+    TRUE ~ NA_character_
+  ),
+
+  stringsAsFactors = FALSE
+)
+
+if (anyNA(metadata$Genotype)) {
+  stop("Failed to assign genotype to one or more samples.")
+}
+
+if (anyNA(metadata$Treatment)) {
+  stop("Failed to assign treatment to one or more samples.")
+}
+
+
+# ============================================================
+# 3. Set factors
+# ============================================================
+
+metadata$Genotype <- factor(
+  metadata$Genotype,
+  levels = c("101-14", "3309", "sw")
+)
+
+metadata$Treatment <- factor(
+  metadata$Treatment,
+  levels = c("Control", "Infested")
+)
+
+print(
+  table(
+    metadata$Genotype,
+    metadata$Treatment
+  )
+)
+
+
+# ============================================================
+# 4. Combine metadata + eigengenes
+# ============================================================
+
+dat <- cbind(
+  metadata,
+  as.data.frame(
+    MEs_analysis,
+    check.names = FALSE
+  )
+)
+
+write.csv(
+  dat,
+  file.path(
+    OUT_DIR,
+    "signed_power16_Module_Eigengenes_with_Metadata.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ============================================================
+# 5. Identify modules
+# ============================================================
+
+module_cols <- grep(
+  "^ME",
+  colnames(dat),
+  value = TRUE
+)
+
+# Exclude unassigned grey genes
+module_cols <- setdiff(
+  module_cols,
+  "MEgrey"
+)
+
+cat(
+  "Number of modules being tested:",
+  length(module_cols),
+  "\n"
+)
+
+
+# ============================================================
+# 6. Type III contrasts
+# ============================================================
+
+old_contrasts <- options("contrasts")
+
+options(
+  contrasts = c(
+    "contr.sum",
+    "contr.poly"
+  )
+)
+
+
+# ============================================================
+# 7. Regression:
+#
+# ME ~ Genotype * Treatment
+#
+# Tests:
+#   Genotype
+#   Treatment
+#   Genotype x Treatment
+# ============================================================
+
+results_list <- vector(
+  "list",
+  length(module_cols)
+)
+
+names(results_list) <- module_cols
+
+
+for (mod in module_cols) {
+
+  cat("Testing:", mod, "\n")
+
+  form <- reformulate(
+    "Genotype * Treatment",
+    response = mod
+  )
+
+  fit <- lm(
+    form,
+    data = dat
+  )
+
+  fit_anova <- car::Anova(
+    fit,
+    type = 3
+  )
+
+  fit_summary <- summary(fit)
+
+  results_list[[mod]] <- data.frame(
+
+    Module_Eigengene = mod,
+
+    Module = sub(
+      "^ME",
+      "",
+      mod
+    ),
+
+    P_Genotype =
+      fit_anova["Genotype", "Pr(>F)"],
+
+    P_Treatment =
+      fit_anova["Treatment", "Pr(>F)"],
+
+    P_GxT =
+      fit_anova["Genotype:Treatment", "Pr(>F)"],
+
+    R_squared =
+      fit_summary$r.squared,
+
+    Adjusted_R_squared =
+      fit_summary$adj.r.squared,
+
+    stringsAsFactors = FALSE
+  )
+}
+
+
+# Restore contrasts
+options(
+  contrasts = old_contrasts$contrasts
+)
+
+
+# ============================================================
+# 8. Combine modules + FDR correction
+# ============================================================
+
+final_results <- bind_rows(
+  results_list
+) %>%
+
+  mutate(
+
+    FDR_Genotype = p.adjust(
+      P_Genotype,
+      method = "BH"
+    ),
+
+    FDR_Treatment = p.adjust(
+      P_Treatment,
+      method = "BH"
+    ),
+
+    FDR_GxT = p.adjust(
+      P_GxT,
+      method = "BH"
+    ),
+
+    Sig_Genotype =
+      FDR_Genotype < 0.05,
+
+    Sig_Treatment =
+      FDR_Treatment < 0.05,
+
+    Sig_GxT =
+      FDR_GxT < 0.05
+
+  ) %>%
+
+  arrange(
+    FDR_GxT,
+    FDR_Treatment,
+    FDR_Genotype
+  )
+
+
+# ============================================================
+# 9. Inspect results BEFORE writing
+# ============================================================
+
+cat("\nRegression result dimensions:\n")
+print(dim(final_results))
+
+cat("\nTop results:\n")
+print(head(final_results, 10))
+
+
+# ============================================================
+# 10. WRITE REGRESSION RESULTS
+# ============================================================
+
+csv_file <- file.path(
+  OUT_DIR,
+  "signed_power16_WGCNA_Linear_Regression_Results.csv"
+)
+
+xlsx_file <- file.path(
+  OUT_DIR,
+  "signed_power16_WGCNA_Linear_Regression_Results.xlsx"
+)
+
+write.csv(
+  final_results,
+  csv_file,
+  row.names = FALSE
+)
+
+writexl::write_xlsx(
+  final_results,
+  xlsx_file
+)
+
+
+# ============================================================
+# 11. Save separate ranked result tables
+# ============================================================
+
+write.csv(
+  final_results %>%
+    arrange(FDR_Genotype),
+
+  file.path(
+    OUT_DIR,
+    "signed_power16_modules_ranked_by_Genotype.csv"
+  ),
+
+  row.names = FALSE
+)
+
+write.csv(
+  final_results %>%
+    arrange(FDR_Treatment),
+
+  file.path(
+    OUT_DIR,
+    "signed_power16_modules_ranked_by_Treatment.csv"
+  ),
+
+  row.names = FALSE
+)
+
+write.csv(
+  final_results %>%
+    arrange(FDR_GxT),
+
+  file.path(
+    OUT_DIR,
+    "signed_power16_modules_ranked_by_GxT.csv"
+  ),
+
+  row.names = FALSE
+)
+
+
+# ============================================================
+# 12. Save regression RData checkpoint
+# ============================================================
+
+save(
+  dat,
+  metadata,
+  MEs_analysis,
+  final_results,
+
+  file = file.path(
+    OUT_DIR,
+    "signed_power16_WGCNA_module_regression.RData"
+  )
+)
+
+
+# ============================================================
+# 13. Confirm files
+# ============================================================
+
+cat("\nSaved regression results:\n")
+cat(csv_file, "\n")
+cat(xlsx_file, "\n")
+
+cat("\nSignificant modules (FDR < 0.05):\n")
+
+cat(
+  "Genotype:",
+  sum(final_results$FDR_Genotype < 0.05),
+  "\n"
+)
+
+cat(
+  "Treatment:",
+  sum(final_results$FDR_Treatment < 0.05),
+  "\n"
+)
+
+cat(
+  "G x T:",
+  sum(final_results$FDR_GxT < 0.05),
+  "\n"
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Perform analysis of modules linked to resisant response, based on linear regression results 
+### Modules MElightcyan, MEwhite, MEmidnightblue
+
+
+
+# Start interactive bash
+srun --mem=80g --cpus-per-task 1 --time=01:00:00 --pty bash -l
+
+# Set WD
+cd /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2
+
+# activate R 
+R 
+
+
+# Run R script to annotate all genes in the signed co-expression network
+
+# ============================================================
+# CREATE ANNOTATED SIGNED WGCNA GENE/MODULE TABLE
+# ============================================================
+
+library(dplyr)
+library(tidyr)
+library(readr)
+library(writexl)
+
+BASE <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+WGCNA_DIR <- file.path(
+  BASE,
+  "WGCNA_Vrip_X_Vrup",
+  "signed_network"
+)
+
+NETWORK_FILE <- file.path(
+  WGCNA_DIR,
+  "Vrip_X_Vrup_signed_power16_WGCNA.RData"
+)
+
+SQANTI_FILE <- file.path(
+  BASE,
+  "sqanti_results",
+  "Vrip_X_Vrup_sqanti",
+  "filter_results",
+  "Vrip_X_Vrup_filtered_RulesFilter_result_classification.txt"
+)
+
+EGGNOG_FILE <- file.path(
+  BASE,
+  "eggnog_results",
+  "Vrip_X_Vrup_eggnog.emapper.annotations"
+)
+
+
+# ============================================================
+# 1. Load signed WGCNA assignments
+# ============================================================
+
+load(NETWORK_FILE)
+
+wgcna_modules <- gene_module_df %>%
+  dplyr::rename(
+    Gene_ID = associated_gene,
+    Module_Color = ModuleAssignment
+  )
+
+cat("WGCNA genes:", nrow(wgcna_modules), "\n")
+
+# WGCNA genes: 44,996 
+
+# ============================================================
+# 2. Load SQANTI isoform -> gene mapping
+# ============================================================
+
+sqanti <- read.delim(
+  SQANTI_FILE,
+  header = TRUE,
+  sep = "\t",
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+sqanti_map <- sqanti %>%
+  filter(filter_result == "Isoform") %>%
+  dplyr::select(
+    isoform,
+    associated_gene
+  ) %>%
+  distinct()
+
+
+# ============================================================
+# 3. Load eggNOG annotation
+# ============================================================
+
+lines <- readLines(EGGNOG_FILE)
+
+header_line <- grep(
+  "^#query\\t",
+  lines
+)[1]
+
+eggnog_header <- strsplit(
+  sub("^#", "", lines[header_line]),
+  "\t"
+)[[1]]
+
+eggnog <- read.delim(
+  EGGNOG_FILE,
+  skip = header_line,
+  header = FALSE,
+  sep = "\t",
+  quote = "",
+  comment.char = "#",
+  fill = TRUE,
+  stringsAsFactors = FALSE,
+  col.names = eggnog_header,
+  check.names = FALSE
+)
+
+cat("eggNOG rows:", nrow(eggnog), "\n")
+
+
+# ============================================================
+# 4. Join eggNOG isoforms to SQANTI genes
+# ============================================================
+
+isoform_annotation <- sqanti_map %>%
+  left_join(
+    eggnog,
+    by = c("isoform" = "query")
+  )
+
+
+# ============================================================
+# 5. Collapse isoform annotations to gene level
+# ============================================================
+
+collapse_unique <- function(x) {
+
+  x <- x[
+    !is.na(x) &
+    x != "" &
+    x != "-"
+  ]
+
+  if (length(x) == 0) {
+    return(NA_character_)
+  }
+
+  paste(
+    unique(x),
+    collapse = " | "
+  )
+}
+
+
+gene_annotation <- isoform_annotation %>%
+  group_by(associated_gene) %>%
+  summarise(
+
+    Description =
+      collapse_unique(Description),
+
+    Preferred_name =
+      collapse_unique(Preferred_name),
+
+    GOs =
+      collapse_unique(GOs),
+
+    KEGG_ko =
+      collapse_unique(KEGG_ko),
+
+    KEGG_Pathway =
+      collapse_unique(KEGG_Pathway),
+
+    PFAMs =
+      collapse_unique(PFAMs),
+
+    .groups = "drop"
+  )
+
+
+# ============================================================
+# 6. Join annotations to WGCNA modules
+# ============================================================
+
+wgcna_annotated <- wgcna_modules %>%
+
+  left_join(
+    gene_annotation,
+    by = c(
+      "Gene_ID" = "associated_gene"
+    )
+  )
+
+
+cat(
+  "Final annotated WGCNA genes:",
+  nrow(wgcna_annotated),
+  "\n"
+)
+
+print(
+  table(
+    wgcna_annotated$Module_Color
+  )
+)
+
+
+# ============================================================
+# 7. Export
+# ============================================================
+
+write.csv(
+  wgcna_annotated,
+  file.path(
+    WGCNA_DIR,
+    "signed_power16_WGCNA_Modules_Annotated.csv"
+  ),
+  row.names = FALSE
+)
+
+writexl::write_xlsx(
+  wgcna_annotated,
+  file.path(
+    WGCNA_DIR,
+    "signed_power16_WGCNA_Modules_Annotated.xlsx"
+  )
+)
+
+
+
+
+
+
+### Perform GO and KEGG enrichment for the 3 modules
+
+#!/usr/bin/env Rscript
+
+# ============================================================
+# FUNCTIONAL ENRICHMENT OF SIGNED WGCNA MODULES
+#
+# Target modules:
+#   lightcyan
+#   white
+#   midnightblue
+#
+# Network:
+#   Signed WGCNA, power 16
+#
+# Significance criteria:
+#   clusterProfiler pvalueCutoff = 0.05
+#   BH correction
+#   minGSSize = 5
+#   Count >= 5
+#
+# Plotting:
+#   Exact duplicate contributing-gene sets are represented
+#   only once in plots.
+#
+#   FULL significant results are still retained in CSV files.
+# ============================================================
+
+
+# ============================================================
+# 0. Libraries
+# ============================================================
+
+library(tidyverse)
+library(clusterProfiler)
+library(GO.db)
+library(AnnotationDbi)
+library(enrichplot)
+library(ggplot2)
+library(KEGGREST)
+
+
+# ============================================================
+# 1. Paths
+# ============================================================
+
+BASE <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+WGCNA_DIR <- file.path(
+  BASE,
+  "WGCNA_Vrip_X_Vrup",
+  "signed_network"
+)
+
+OUT_DIR <- file.path(
+  WGCNA_DIR,
+  "target_module_enrichment"
+)
+
+dir.create(
+  OUT_DIR,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+
+# ============================================================
+# 2. Modules of interest
+# ============================================================
+
+target_modules <- c(
+  "lightcyan",
+  "white",
+  "midnightblue"
+)
+
+
+# ============================================================
+# 3. Load annotated signed-WGCNA table
+# ============================================================
+
+wgcna_data <- read.csv(
+  file.path(
+    WGCNA_DIR,
+    "signed_power16_WGCNA_Modules_Annotated.csv"
+  ),
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+
+cat(
+  "WGCNA genes:",
+  nrow(wgcna_data),
+  "\n"
+)
+
+
+# ============================================================
+# 4. GO master map
+# ============================================================
+
+cat("Building GO term map...\n")
+
+go_master_map <- AnnotationDbi::select(
+  GO.db,
+  keys = keys(GO.db),
+  columns = c(
+    "GOID",
+    "ONTOLOGY",
+    "TERM"
+  ),
+  keytype = "GOID"
+) %>%
+  dplyr::rename(
+    ID = GOID,
+    Description = TERM
+  ) %>%
+  distinct()
+
+
+# ============================================================
+# 5. KEGG pathway descriptions
+# ============================================================
+
+cat("Retrieving KEGG pathway descriptions...\n")
+
+kegg_pathway_list <- KEGGREST::keggList(
+  "pathway",
+  "ko"
+)
+
+KEGG_master_names <- tibble(
+  ID = names(kegg_pathway_list),
+  Description = unname(kegg_pathway_list)
+) %>%
+  mutate(
+
+    # path:ko00010 -> ko00010
+    ID = sub(
+      "^path:",
+      "",
+      ID
+    ),
+
+    Description = sub(
+      " - Reference pathway$",
+      "",
+      Description
+    )
+  )
+
+cat(
+  "Retrieved",
+  nrow(KEGG_master_names),
+  "KEGG pathway names.\n"
+)
+
+
+# ============================================================
+# 6. Statistical universe
+#
+# All genes that entered the signed WGCNA network.
+# ============================================================
+
+universe_genes <- unique(
+  wgcna_data$Gene_ID
+)
+
+cat(
+  "WGCNA universe:",
+  length(universe_genes),
+  "genes\n"
+)
+
+
+# ============================================================
+# 7. Gene-level KEGG TERM2GENE
+#
+# Keep ONLY koXXXXX.
+#
+# This prevents duplicate representation of the same KEGG
+# pathway as both mapXXXXX and koXXXXX.
+#
+# distinct(ID, Gene) also ensures that a gene contributes
+# only once to a pathway even if it was represented through
+# multiple isoforms/annotations.
+# ============================================================
+
+KEGG_links <- wgcna_data %>%
+
+  dplyr::select(
+    Gene_ID,
+    KEGG_Pathway
+  ) %>%
+
+  filter(
+    !is.na(KEGG_Pathway),
+    KEGG_Pathway != "",
+    KEGG_Pathway != "-"
+  ) %>%
+
+  separate_rows(
+    KEGG_Pathway,
+    sep = "\\s*\\|\\s*|,"
+  ) %>%
+
+  mutate(
+    KEGG_Pathway = trimws(
+      KEGG_Pathway
+    )
+  ) %>%
+
+  filter(
+    grepl(
+      "^ko[0-9]+$",
+      KEGG_Pathway
+    )
+  ) %>%
+
+  transmute(
+    ID = KEGG_Pathway,
+    Gene = Gene_ID
+  ) %>%
+
+  distinct(
+    ID,
+    Gene
+  )
+
+
+# Add functional pathway names
+KEGG_names <- KEGG_links %>%
+
+  distinct(
+    ID
+  ) %>%
+
+  left_join(
+    KEGG_master_names,
+    by = "ID"
+  ) %>%
+
+  mutate(
+    Description = ifelse(
+      is.na(Description),
+      ID,
+      Description
+    )
+  )
+
+
+cat(
+  "Unique KEGG gene-pathway links:",
+  nrow(KEGG_links),
+  "\n"
+)
+
+
+# ============================================================
+# 8. Gene-level GO TERM2GENE
+#
+# Again, one gene -> GO relationship is counted only once.
+# ============================================================
+
+GO_links <- wgcna_data %>%
+
+  dplyr::select(
+    Gene_ID,
+    GOs
+  ) %>%
+
+  filter(
+    !is.na(GOs),
+    GOs != "",
+    GOs != "-"
+  ) %>%
+
+  separate_rows(
+    GOs,
+    sep = "\\s*\\|\\s*|,"
+  ) %>%
+
+  mutate(
+    GOs = trimws(GOs)
+  ) %>%
+
+  filter(
+    grepl(
+      "^GO:[0-9]+$",
+      GOs
+    )
+  ) %>%
+
+  transmute(
+    ID = GOs,
+    Gene = Gene_ID
+  ) %>%
+
+  distinct(
+    ID,
+    Gene
+  ) %>%
+
+  left_join(
+    go_master_map,
+    by = "ID"
+  )
+
+
+cat(
+  "Unique GO gene-term links:",
+  nrow(GO_links),
+  "\n"
+)
+
+
+# ============================================================
+# 9. Function:
+# Remove exact duplicate contributing-gene sets FOR PLOTTING
+#
+# Example:
+#
+# Pathway A -> gene1/gene4/gene8/gene10
+# Pathway B -> gene1/gene4/gene8/gene10
+#
+# Only the pathway with the smaller adjusted P-value is
+# retained in the plot.
+#
+# IMPORTANT:
+# This does NOT alter the full enrichment-result CSV.
+# ============================================================
+
+remove_duplicate_gene_sets <- function(result_df) {
+
+  if (nrow(result_df) == 0) {
+    return(result_df)
+  }
+
+  result_df %>%
+
+    rowwise() %>%
+
+    mutate(
+
+      GeneSet = paste(
+        sort(
+          unique(
+            strsplit(
+              geneID,
+              "/",
+              fixed = TRUE
+            )[[1]]
+          )
+        ),
+        collapse = "/"
+      )
+
+    ) %>%
+
+    ungroup() %>%
+
+    arrange(
+      p.adjust,
+      pvalue
+    ) %>%
+
+    distinct(
+      GeneSet,
+      .keep_all = TRUE
+    ) %>%
+
+    dplyr::select(
+      -GeneSet
+    )
+}
+
+
+# ============================================================
+# 10. Main module enrichment loop
+# ============================================================
+
+for (mod in target_modules) {
+
+  cat("\n")
+  cat("============================================================\n")
+  cat("ANALYZING MODULE:", mod, "\n")
+  cat("============================================================\n")
+
+
+  # ----------------------------------------------------------
+  # Extract genes belonging to this module
+  # ----------------------------------------------------------
+
+  target_genes <- wgcna_data %>%
+
+    filter(
+      Module_Color == mod
+    ) %>%
+
+    pull(
+      Gene_ID
+    ) %>%
+
+    unique()
+
+
+  cat(
+    "Genes in module:",
+    length(target_genes),
+    "\n"
+  )
+
+
+  if (length(target_genes) < 5) {
+
+    cat(
+      "[!] Too few genes for enrichment. Skipping.\n"
+    )
+
+    next
+  }
+
+
+  # ==========================================================
+  # ==========================================================
+  # 11. KEGG ENRICHMENT
+  # ==========================================================
+  # ==========================================================
+
+  cat("\n[+] Running KEGG enrichment...\n")
+
+
+  # Use genes with KEGG annotation as the effective
+  # KEGG statistical universe
+  kegg_universe <- unique(
+    KEGG_links$Gene
+  )
+
+  kegg_targets <- intersect(
+    target_genes,
+    kegg_universe
+  )
+
+
+  cat(
+    "KEGG-annotated background genes:",
+    length(kegg_universe),
+    "\n"
+  )
+
+  cat(
+    "KEGG-annotated module genes:",
+    length(kegg_targets),
+    "\n"
+  )
+
+
+  if (length(kegg_targets) >= 5) {
+
+    k_res <- enricher(
+
+      gene = kegg_targets,
+
+      universe = kegg_universe,
+
+      TERM2GENE = KEGG_links %>%
+        dplyr::select(
+          ID,
+          Gene
+        ),
+
+      TERM2NAME = KEGG_names,
+
+      pvalueCutoff = 0.05,
+
+      pAdjustMethod = "BH",
+
+      minGSSize = 5
+    )
+
+
+    if (
+      !is.null(k_res) &&
+      nrow(as.data.frame(k_res)) > 0
+    ) {
+
+      # ------------------------------------------------------
+      # Same final significance/count criterion as previous
+      # workflow
+      # ------------------------------------------------------
+
+      k_res@result <- k_res@result %>%
+
+        filter(
+          Count >= 5
+        )
+
+
+      if (nrow(k_res@result) > 0) {
+
+        # ====================================================
+        # FULL significant results
+        #
+        # No gene-set redundancy removed here.
+        # ====================================================
+
+        kegg_full <- as.data.frame(
+          k_res
+        )
+
+
+        write.csv(
+          kegg_full,
+          file.path(
+            OUT_DIR,
+            paste0(
+              "Enrichment_KEGG_ME",
+              mod,
+              "_results.csv"
+            )
+          ),
+          row.names = FALSE
+        )
+
+
+        # ====================================================
+        # Contributing genes for all significant pathways
+        # ====================================================
+
+        kegg_gene_list <- kegg_full %>%
+
+          dplyr::select(
+            ID,
+            Description,
+            GeneRatio,
+            BgRatio,
+            pvalue,
+            p.adjust,
+            Count,
+            geneID
+          ) %>%
+
+          separate_rows(
+            geneID,
+            sep = "/"
+          ) %>%
+
+          dplyr::rename(
+            Gene_ID = geneID
+          )
+
+
+        write.csv(
+          kegg_gene_list,
+          file.path(
+            OUT_DIR,
+            paste0(
+              "Enrichment_KEGG_ME",
+              mod,
+              "_gene_list.csv"
+            )
+          ),
+          row.names = FALSE
+        )
+
+
+        # ====================================================
+        # Remove EXACT duplicate gene sets for PLOT only
+        # ====================================================
+
+        kegg_plot_df <- remove_duplicate_gene_sets(
+          kegg_full
+        )
+
+
+        cat(
+          "Significant KEGG pathways:",
+          nrow(kegg_full),
+          "\n"
+        )
+
+        cat(
+          "Unique contributing gene sets for plot:",
+          nrow(kegg_plot_df),
+          "\n"
+        )
+
+
+        # Save the exact set of pathways displayed
+        write.csv(
+          kegg_plot_df,
+          file.path(
+            OUT_DIR,
+            paste0(
+              "Enrichment_KEGG_ME",
+              mod,
+              "_PLOTTED_results.csv"
+            )
+          ),
+          row.names = FALSE
+        )
+
+
+        # Put reduced result back into enrichment object
+        k_plot <- k_res
+
+        k_plot@result <- kegg_plot_df
+
+
+        # ====================================================
+        # KEGG dotplot
+        # ====================================================
+
+        pdf(
+          file.path(
+            OUT_DIR,
+            paste0(
+              "Enrichment_KEGG_ME",
+              mod,
+              "_dotplot.pdf"
+            )
+          ),
+          width = 11,
+          height = ifelse(
+            nrow(kegg_plot_df) < 10,
+            7,
+            9
+          )
+        )
+
+
+        print(
+
+          dotplot(
+            k_plot,
+            showCategory = 20,
+            label_format = 55
+          ) +
+
+            ggtitle(
+              paste(
+                "KEGG Enrichment:",
+                mod
+              )
+            ) +
+
+            theme_bw()
+        )
+
+
+        dev.off()
+      }
+
+    } else {
+
+      cat(
+        "[-] No significant KEGG pathways.\n"
+      )
+    }
+
+  } else {
+
+    cat(
+      "[-] Too few KEGG-annotated module genes.\n"
+    )
+  }
+
+
+  # ==========================================================
+  # ==========================================================
+  # 12. GO ENRICHMENT
+  # ==========================================================
+  # ==========================================================
+
+  for (ont in c(
+    "BP",
+    "MF",
+    "CC"
+  )) {
+
+    cat(
+      "\n[+] Running GO",
+      ont,
+      "...\n"
+    )
+
+
+    ont_links <- GO_links %>%
+
+      filter(
+        ONTOLOGY == ont
+      ) %>%
+
+      dplyr::select(
+        ID,
+        Gene
+      ) %>%
+
+      distinct()
+
+
+    ont_names <- go_master_map %>%
+
+      filter(
+        ONTOLOGY == ont
+      ) %>%
+
+      dplyr::select(
+        ID,
+        Description
+      ) %>%
+
+      distinct()
+
+
+    if (nrow(ont_links) == 0) {
+      next
+    }
+
+
+    # --------------------------------------------------------
+    # GO-specific annotated background
+    # --------------------------------------------------------
+
+    go_universe <- unique(
+      ont_links$Gene
+    )
+
+    go_targets <- intersect(
+      target_genes,
+      go_universe
+    )
+
+
+    cat(
+      "GO",
+      ont,
+      "background genes:",
+      length(go_universe),
+      "\n"
+    )
+
+    cat(
+      "GO",
+      ont,
+      "module genes:",
+      length(go_targets),
+      "\n"
+    )
+
+
+    if (length(go_targets) < 5) {
+      next
+    }
+
+
+    # ========================================================
+    # GO enrichment
+    # ========================================================
+
+    go_res <- enricher(
+
+      gene = go_targets,
+
+      universe = go_universe,
+
+      TERM2GENE = ont_links,
+
+      TERM2NAME = ont_names,
+
+      pvalueCutoff = 0.05,
+
+      pAdjustMethod = "BH",
+
+      minGSSize = 5
+    )
+
+
+    if (
+      is.null(go_res) ||
+      nrow(as.data.frame(go_res)) == 0
+    ) {
+
+      cat(
+        "[-] No significant GO",
+        ont,
+        "terms.\n"
+      )
+
+      next
+    }
+
+
+    # Same Count threshold as previous workflow
+    go_res@result <- go_res@result %>%
+
+      filter(
+        Count >= 5
+      )
+
+
+    if (nrow(go_res@result) == 0) {
+      next
+    }
+
+
+    # ========================================================
+    # FULL significant GO results
+    # ========================================================
+
+    go_full <- as.data.frame(
+      go_res
+    )
+
+
+    write.csv(
+      go_full,
+      file.path(
+        OUT_DIR,
+        paste0(
+          "Enrichment_GO_",
+          ont,
+          "_ME",
+          mod,
+          "_results.csv"
+        )
+      ),
+      row.names = FALSE
+    )
+
+
+    # ========================================================
+    # Contributing genes
+    # ========================================================
+
+    go_gene_list <- go_full %>%
+
+      dplyr::select(
+        ID,
+        Description,
+        GeneRatio,
+        BgRatio,
+        pvalue,
+        p.adjust,
+        Count,
+        geneID
+      ) %>%
+
+      separate_rows(
+        geneID,
+        sep = "/"
+      ) %>%
+
+      dplyr::rename(
+        Gene_ID = geneID
+      )
+
+
+    write.csv(
+      go_gene_list,
+      file.path(
+        OUT_DIR,
+        paste0(
+          "Enrichment_GO_",
+          ont,
+          "_ME",
+          mod,
+          "_gene_list.csv"
+        )
+      ),
+      row.names = FALSE
+    )
+
+
+    # ========================================================
+    # Remove exact duplicate contributing-gene sets for
+    # plotting only.
+    #
+    # This is NOT semantic GO simplification.
+    #
+    # Related-but-distinct GO terms are still retained.
+    # ========================================================
+
+    go_plot_df <- remove_duplicate_gene_sets(
+      go_full
+    )
+
+
+    cat(
+      "Significant GO",
+      ont,
+      "terms:",
+      nrow(go_full),
+      "\n"
+    )
+
+    cat(
+      "Unique contributing gene sets for plot:",
+      nrow(go_plot_df),
+      "\n"
+    )
+
+
+    write.csv(
+      go_plot_df,
+      file.path(
+        OUT_DIR,
+        paste0(
+          "Enrichment_GO_",
+          ont,
+          "_ME",
+          mod,
+          "_PLOTTED_results.csv"
+        )
+      ),
+      row.names = FALSE
+    )
+
+
+    go_plot <- go_res
+    go_plot@result <- go_plot_df
+
+
+    # ========================================================
+    # GO dotplot
+    # ========================================================
+
+    pdf(
+      file.path(
+        OUT_DIR,
+        paste0(
+          "Enrichment_GO_",
+          ont,
+          "_ME",
+          mod,
+          "_dotplot.pdf"
+        )
+      ),
+      width = 11,
+      height = ifelse(
+        nrow(go_plot_df) < 10,
+        7,
+        9
+      )
+    )
+
+
+    print(
+
+      dotplot(
+        go_plot,
+        showCategory = 20,
+        label_format = 50
+      ) +
+
+        ggtitle(
+          paste(
+            "GO",
+            ont,
+            "Enrichment:",
+            mod
+          )
+        ) +
+
+        theme_bw()
+    )
+
+
+    dev.off()
+  }
+}
+
+
+cat("\n")
+cat("============================================================\n")
+cat("SIGNED WGCNA MODULE ENRICHMENT COMPLETE\n")
+cat("============================================================\n")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Calculate hub genes for gene co-expression modules 
+
+# ============================================================
+# HUB GENES FOR TARGET SIGNED-WGCNA MODULES
+# ============================================================
+
+library(WGCNA)
+library(dplyr)
+
+BASE <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+WGCNA_BASE <- file.path(
+  BASE,
+  "WGCNA_Vrip_X_Vrup"
+)
+
+WGCNA_DIR <- file.path(
+  WGCNA_BASE,
+  "signed_network"
+)
+
+OUT_DIR <- file.path(
+  WGCNA_DIR,
+  "target_module_hubs"
+)
+
+dir.create(
+  OUT_DIR,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+
+target_modules <- c(
+  "lightcyan",
+  "white",
+  "midnightblue"
+)
+
+
+# ============================================================
+# 1. Load expression input
+# ============================================================
+
+load(
+  file.path(
+    WGCNA_BASE,
+    "WGCNA_input_Vrip_X_Vrup.RData"
+  )
+)
+
+input_mat <- datExpr
+
+
+# ============================================================
+# 2. Load final signed network
+# ============================================================
+
+load(
+  file.path(
+    WGCNA_DIR,
+    "Vrip_X_Vrup_signed_power16_WGCNA.RData"
+  )
+)
+
+
+# ============================================================
+# 3. Confirm gene order
+# ============================================================
+
+if (!identical(
+  colnames(input_mat),
+  gene_module_df$associated_gene
+)) {
+
+  stop(
+    "Gene order in input matrix does not match network assignments."
+  )
+}
+
+if (!identical(
+  rownames(input_mat),
+  rownames(MEs)
+)) {
+
+  stop(
+    "Sample order in input matrix does not match module eigengenes."
+  )
+}
+
+
+# ============================================================
+# 4. Module Membership
+# ============================================================
+
+cat(
+  "Calculating module membership...\n"
+)
+
+datKME <- signedKME(
+  input_mat,
+  MEs,
+  outputColumnName = "MM."
+)
+
+
+# ============================================================
+# 5. Treatment gene significance
+#
+# This reproduces the old analysis:
+# Control = 0
+# Infested = 1
+# ============================================================
+
+sample_names <- rownames(
+  input_mat
+)
+
+trait_status <- ifelse(
+  grepl(
+    "_inf_",
+    sample_names
+  ),
+  1,
+  0
+)
+
+trait_df <- data.frame(
+  Treatment = trait_status,
+  row.names = sample_names
+)
+
+
+geneTraitSignificance <- cor(
+  input_mat,
+  trait_df,
+  use = "p"
+)
+
+GSPvalue <- corPvalueStudent(
+  geneTraitSignificance,
+  nrow(input_mat)
+)
+
+colnames(
+  geneTraitSignificance
+) <- "GS.Treatment"
+
+colnames(
+  GSPvalue
+) <- "p.GS.Treatment"
+
+
+# ============================================================
+# 6. Load functional annotations
+# ============================================================
+
+annotations <- read.csv(
+  file.path(
+    WGCNA_DIR,
+    "signed_power16_WGCNA_Modules_Annotated.csv"
+  ),
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+
+
+# ============================================================
+# 7. Master gene metric table
+# ============================================================
+
+gene_info_df <- data.frame(
+
+  Gene_ID =
+    colnames(input_mat),
+
+  Module_Color =
+    dynamicColors,
+
+  stringsAsFactors = FALSE
+)
+
+
+hub_master_table <- gene_info_df %>%
+
+  bind_cols(
+    as.data.frame(
+      datKME
+    )
+  ) %>%
+
+  bind_cols(
+    as.data.frame(
+      geneTraitSignificance
+    )
+  ) %>%
+
+  bind_cols(
+    as.data.frame(
+      GSPvalue
+    )
+  ) %>%
+
+  left_join(
+
+    annotations %>%
+
+      dplyr::select(
+        Gene_ID,
+        Description,
+        Preferred_name,
+        GOs,
+        KEGG_ko,
+        KEGG_Pathway,
+        PFAMs
+      ),
+
+    by = "Gene_ID"
+  )
+
+
+# ============================================================
+# 8. Extract hub genes
+# ============================================================
+
+top_hubs_list <- list()
+
+
+for (mod in target_modules) {
+
+  cat(
+    "\nProcessing module:",
+    mod,
+    "\n"
+  )
+
+
+  mm_col <- paste0(
+    "MM.",
+    mod
+  )
+
+
+  if (!mm_col %in%
+      colnames(hub_master_table)) {
+
+    warning(
+      paste(
+        "Missing module-membership column:",
+        mm_col
+      )
+    )
+
+    next
+  }
+
+
+  module_hubs <- hub_master_table %>%
+
+    filter(
+      Module_Color == mod
+    ) %>%
+
+    arrange(
+      desc(
+        abs(
+          .data[[mm_col]]
+        )
+      )
+    ) %>%
+
+    mutate(
+      Target_Module = mod
+    )
+
+
+  # Full module
+  write.csv(
+    module_hubs,
+    file.path(
+      OUT_DIR,
+      paste0(
+        "Module_",
+        mod,
+        "_gene_metrics.csv"
+      )
+    ),
+    row.names = FALSE
+  )
+
+
+  # Top 50 by module membership
+  top_hubs_list[[mod]] <-
+    head(
+      module_hubs,
+      50
+    )
+
+
+  cat(
+    "Genes:",
+    nrow(module_hubs),
+    "\n"
+  )
+}
+
+
+# ============================================================
+# 9. Combined top-hub table
+# ============================================================
+
+top_hubs_master <- bind_rows(
+  top_hubs_list
+)
+
+write.csv(
+  top_hubs_master,
+  file.path(
+    OUT_DIR,
+    "Top_50_Hub_Genes_All_Target_Modules.csv"
+  ),
+  row.names = FALSE
+)
+
+
+save(
+  datKME,
+  geneTraitSignificance,
+  GSPvalue,
+  hub_master_table,
+  top_hubs_master,
+
+  file = file.path(
+    OUT_DIR,
+    "signed_power16_target_module_hub_metrics.RData"
+  )
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### MM vs treatment-GS plots for the 3 modules
+
+# ============================================================
+# MODULE MEMBERSHIP vs TREATMENT GENE SIGNIFICANCE
+# Fixed point color = blue for visibility
+# ============================================================
+
+library(WGCNA)
+
+BASE <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+HUB_DIR <- file.path(
+  BASE,
+  "WGCNA_Vrip_X_Vrup",
+  "signed_network",
+  "target_module_hubs"
+)
+
+load(
+  file.path(
+    HUB_DIR,
+    "signed_power16_target_module_hub_metrics.RData"
+  )
+)
+
+target_modules <- c(
+  "lightcyan",
+  "white",
+  "midnightblue"
+)
+
+
+for (mod in target_modules) {
+
+  cat(
+    "Plotting:",
+    mod,
+    "\n"
+  )
+
+
+  mm_col <- paste0(
+    "MM.",
+    mod
+  )
+
+  moduleGenes <-
+    hub_master_table$Module_Color == mod
+
+
+  mm_values <- abs(
+    hub_master_table[
+      moduleGenes,
+      mm_col
+    ]
+  )
+
+  gs_values <- abs(
+    hub_master_table[
+      moduleGenes,
+      "GS.Treatment"
+    ]
+  )
+
+
+  cor_val <- cor(
+    mm_values,
+    gs_values,
+    use = "p"
+  )
+
+  pval <- corPvalueStudent(
+    cor_val,
+    sum(moduleGenes)
+  )
+
+
+  pdf(
+    file.path(
+      HUB_DIR,
+      paste0(
+        "MM_vs_GS_Treatment_",
+        mod,
+        ".pdf"
+      )
+    ),
+    width = 7,
+    height = 7
+  )
+
+
+  verboseScatterplot(
+
+    mm_values,
+
+    gs_values,
+
+    xlab = paste(
+      "Module Membership in",
+      mod,
+      "module"
+    ),
+
+    ylab =
+      "Gene Significance for Infestation (absolute)",
+
+    main = paste(
+      "Module Membership vs. Gene Significance:",
+      mod
+    ),
+
+    sub = paste0(
+      "Cor = ",
+      signif(
+        cor_val,
+        2
+      ),
+      ", p = ",
+      signif(
+        pval,
+        2
+      )
+    ),
+
+    # Fixed color for all modules so points are clearly visible
+    col = "blue"
+  )
+
+
+  dev.off()
+}
+
+
+
+
+
+### Remaking plot and including a regression line to ask whether genes that are more central to a module also tend to be more strongly associated with infestation 
+
+# ============================================================
+# MODULE MEMBERSHIP vs TREATMENT GENE SIGNIFICANCE
+# WITH LINEAR REGRESSION LINE
+# ============================================================
+
+library(WGCNA)
+
+BASE <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+HUB_DIR <- file.path(
+  BASE,
+  "WGCNA_Vrip_X_Vrup",
+  "signed_network",
+  "target_module_hubs"
+)
+
+load(
+  file.path(
+    HUB_DIR,
+    "signed_power16_target_module_hub_metrics.RData"
+  )
+)
+
+target_modules <- c(
+  "lightcyan",
+  "white",
+  "midnightblue"
+)
+
+
+for (mod in target_modules) {
+
+  cat("Plotting:", mod, "\n")
+
+  mm_col <- paste0("MM.", mod)
+
+  moduleGenes <-
+    hub_master_table$Module_Color == mod
+
+
+  # Absolute module membership
+  mm_values <- abs(
+    hub_master_table[
+      moduleGenes,
+      mm_col
+    ]
+  )
+
+
+  # Absolute gene significance for infestation
+  gs_values <- abs(
+    hub_master_table[
+      moduleGenes,
+      "GS.Treatment"
+    ]
+  )
+
+
+  # ==========================================================
+  # Correlation
+  # ==========================================================
+
+  cor_val <- cor(
+    mm_values,
+    gs_values,
+    use = "p"
+  )
+
+  pval <- corPvalueStudent(
+    cor_val,
+    sum(
+      complete.cases(
+        mm_values,
+        gs_values
+      )
+    )
+  )
+
+
+  # ==========================================================
+  # Linear regression
+  # ==========================================================
+
+  fit <- lm(
+    gs_values ~ mm_values
+  )
+
+
+  # ==========================================================
+  # Plot
+  # ==========================================================
+
+  pdf(
+    file.path(
+      HUB_DIR,
+      paste0(
+        "MM_vs_GS_Treatment_",
+        mod,
+        ".pdf"
+      )
+    ),
+    width = 7,
+    height = 7
+  )
+
+
+  plot(
+    mm_values,
+    gs_values,
+
+    pch = 1,
+    col = "blue",
+
+    xlab = paste(
+      "Module Membership in",
+      mod,
+      "module (absolute)"
+    ),
+
+    ylab =
+      "Gene Significance for Infestation (absolute)",
+
+    main = paste(
+      "Module Membership vs. Gene Significance:",
+      mod
+    )
+  )
+
+
+  # Add fitted linear regression line
+  abline(
+    fit,
+    col = "red",
+    lwd = 2
+  )
+
+
+  # Add correlation statistics once
+  legend(
+    "topleft",
+
+    legend = paste0(
+      "r = ",
+      signif(cor_val, 2),
+      "\np = ",
+      format.pval(
+        pval,
+        digits = 2,
+        eps = 1e-300
+      )
+    ),
+
+    bty = "n"
+  )
+
+
+  dev.off()
+}
+
+
+
+
+
+
+
+
+
+
+
+
+### Making a heatmap for the 3 modules of interest, and subset for the genes of intereest in midnightblue modules 
+
+
+# load the gene expression matrix from the saved .Rdata file
+
+load("/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/WGCNA_Vrip_X_Vrup/WGCNA_input_Vrip_X_Vrup.RData")
+ls()
+
+
+
+
+# load libraries
+library(pheatmap)
+library(dplyr)
+
+# create metadata object for the heatmap
+
+samples <- rownames(datExpr)
+
+annotation_col <- data.frame(
+  Genotype = case_when(
+    grepl("^101-14_", samples) ~ "101-14",
+    grepl("^3309_", samples) ~ "3309",
+    grepl("^sw_", samples, ignore.case = TRUE) ~ "SW",
+    TRUE ~ "Other"
+  ),
+  Treatment = case_when(
+    grepl("_con_", samples) ~ "Control",
+    grepl("_inf_", samples) ~ "Infested",
+    TRUE ~ "Unknown"
+  ),
+  row.names = samples
+)
+
+annotation_col$Genotype <- factor(
+  annotation_col$Genotype,
+  levels = c("101-14", "3309", "SW")
+)
+
+annotation_col$Treatment <- factor(
+  annotation_col$Treatment,
+  levels = c("Control", "Infested")
+)
+
+annotation_col
+
+
+# load expression object as transposed data
+expr_normalized <- t(datExpr)
+
+
+colnames(expr_normalized)
+
+
+
+
+
+
+# create heat map of the 3 different modules 
+
+library(dplyr)
+library(pheatmap)
+
+
+modules_of_interest <- c(
+  "lightcyan",
+  "white",
+  "midnightblue"
+)
+
+OUT_DIR <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/WGCNA_Vrip_X_Vrup/signed_network/heatmaps"
+
+dir.create(
+  OUT_DIR,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+for (mod in modules_of_interest) {
+
+  submod <- gene_module_df %>%
+    filter(ModuleAssignment == mod)
+
+  subexpr <- expr_normalized[
+    submod$associated_gene,
+    ,
+    drop = FALSE
+  ]
+
+  cat(
+    "\nModule:", mod,
+    "\nGenes:", nrow(subexpr),
+    "\nSamples:", ncol(subexpr),
+    "\n"
+  )
+
+  pdf(
+    file.path(
+      OUT_DIR,
+      paste0(
+        mod,
+        "_module_heatmap.pdf"
+      )
+    ),
+    width = 10,
+    height = 8
+  )
+
+  pheatmap(
+    subexpr,
+
+    scale = "row",
+
+    cluster_rows = TRUE,
+    cluster_cols = FALSE,
+
+    show_rownames = FALSE,
+    show_colnames = TRUE,
+
+    annotation_col = annotation_col,
+
+    color = colorRampPalette(
+      c("blue", "white", "red")
+    )(50),
+
+    gaps_col = c(3, 6, 9, 11, 14),
+
+    fontsize_col = 8,
+    angle_col = 45,
+
+    border_color = NA,
+
+    main = paste(
+      "WGCNA module:",
+      mod
+    )
+  )
+
+  dev.off()
+}
+
+
+
+
+# heat map for the 10 genes of interest - based on DIU and R gene overlap
+
+target_genes <- c(
+  "VITVri588271_v1.0.hap1.chr08.ver1.0.g199800",
+  "VITVri588271_v1.0.hap1.chr14.ver1.0.g309600",
+  "VITVrpB38_v1.0.hap1.chr16.ver1.0.g254000",
+  "VITVrpB38_v1.0.hap1.chr03.ver1.0.g048930",
+  "VITVri588271_v1.0.hap1.chr17.ver1.0.g346410",
+  "VITVri588271_v1.0.hap1.chr15.ver1.0.g321020",
+  "VITVrpB38_v1.0.hap1.chr07.ver1.0.g114630",
+  "VITVrpB38_v1.0.hap1.chr11.ver1.0.g178120",
+  "VITVrpB38_v1.0.hap1.chr14.ver1.0.g229570",
+  "VITVrpB38_v1.0.hap1.chr17.ver1.0.g265450"
+)
+
+target_labels <- c(
+  "g199800 | WRKY33-like",
+  "g309600 | SAG101-like",
+  "g254000 | receptor-like kinase",
+  "g048930 | carboxylesterase",
+  "g346410 | WAK-like kinase",
+  "g321020 | DMR6/DLO-family oxygenase",
+  "g114630 | CNL",
+  "g178120 | CNL/RLP",
+  "g229570 | SAG101-related",
+  "g265450 | EDS1-family"
+)
+
+names(target_labels) <- target_genes
+
+# Check all genes are present
+target_genes %in% rownames(expr_normalized)
+
+target_expr <- expr_normalized[
+  target_genes,
+  ,
+  drop = FALSE
+]
+
+rownames(target_expr) <- target_labels[
+  target_genes
+]
+
+pdf(
+  file.path(
+    OUT_DIR,
+    "focal_10_gene_heatmap.pdf"
+  ),
+  width = 10,
+  height = 7
+)
+
+pheatmap(
+  target_expr,
+
+  scale = "row",
+
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+
+  annotation_col = annotation_col,
+
+  color = colorRampPalette(
+    c("blue", "white", "red")
+  )(50),
+
+  gaps_col = c(3, 6, 9, 11, 14),
+
+  fontsize_row = 9,
+  fontsize_col = 8,
+
+  angle_col = 45,
+
+  border_color = "grey85",
+
+  main = "Focal WGCNA-DIU candidate genes"
+)
+
+dev.off()
+
+
+
+
+
+
+# heatmap of just the EDS1-family and NLRs 
+
+immune_genes <- c(
+  "VITVri588271_v1.0.hap1.chr14.ver1.0.g309600",
+  "VITVrpB38_v1.0.hap1.chr14.ver1.0.g229570",
+  "VITVrpB38_v1.0.hap1.chr17.ver1.0.g265450",
+  "VITVrpB38_v1.0.hap1.chr07.ver1.0.g114630",
+  "VITVrpB38_v1.0.hap1.chr11.ver1.0.g178120"
+)
+
+immune_labels <- c(
+  "g309600 | SAG101-like",
+  "g229570 | SAG101-related",
+  "g265450 | EDS1-family",
+  "g114630 | CNL",
+  "g178120 | CNL/RLP"
+)
+
+names(immune_labels) <- immune_genes
+
+# Check all genes are present
+immune_genes %in% rownames(expr_normalized)
+
+immune_expr <- expr_normalized[
+  immune_genes,
+  ,
+  drop = FALSE
+]
+
+rownames(immune_expr) <- immune_labels[
+  immune_genes
+]
+
+pdf(
+  file.path(
+    OUT_DIR,
+    "EDS1_SAG101_CNL_heatmap.pdf"
+  ),
+  width = 10,
+  height = 6
+)
+
+pheatmap(
+  immune_expr,
+
+  scale = "row",
+
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+
+  annotation_col = annotation_col,
+
+  color = colorRampPalette(
+    c("blue", "white", "red")
+  )(50),
+
+  gaps_col = c(3, 6, 9, 11, 14),
+
+  fontsize_row = 10,
+  fontsize_col = 8,
+
+  angle_col = 45,
+
+  border_color = "grey85",
+
+  main = "EDS1/SAG101-related and CNL candidates"
+)
+
+dev.off()
+
+
+
+
+
+
+
+
+
+
+
+#### remake heatmap using only normalized expression , not z score
+### what genes are actually expressed in each treatment/sample
+
+# create heat map of the 3 different modules 
+
+library(dplyr)
+library(pheatmap)
+
+
+modules_of_interest <- c(
+  "lightcyan",
+  "white",
+  "midnightblue"
+)
+
+OUT_DIR <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/WGCNA_Vrip_X_Vrup/signed_network/heatmaps"
+
+dir.create(
+  OUT_DIR,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+for (mod in modules_of_interest) {
+
+  submod <- gene_module_df %>%
+    filter(ModuleAssignment == mod)
+
+  subexpr <- expr_normalized[
+    submod$associated_gene,
+    ,
+    drop = FALSE
+  ]
+
+  cat(
+    "\nModule:", mod,
+    "\nGenes:", nrow(subexpr),
+    "\nSamples:", ncol(subexpr),
+    "\n"
+  )
+
+  pdf(
+    file.path(
+      OUT_DIR,
+      paste0(
+        mod,
+        "_module_heatmap_norm_exprs.pdf"
+      )
+    ),
+    width = 10,
+    height = 8
+  )
+
+  pheatmap(
+    subexpr,
+
+    scale = "none",
+
+    cluster_rows = TRUE,
+    cluster_cols = FALSE,
+
+    show_rownames = FALSE,
+    show_colnames = TRUE,
+
+    annotation_col = annotation_col,
+
+    color = colorRampPalette(
+      c("blue", "white", "red")
+    )(50),
+
+    gaps_col = c(3, 6, 9, 11, 14),
+
+    fontsize_col = 8,
+    angle_col = 45,
+
+    border_color = NA,
+
+    main = paste(
+      "WGCNA module:",
+      mod
+    )
+  )
+
+  dev.off()
+}
+
+
+
+
+# heat map for the 10 genes of interest - based on DIU and R gene overlap
+
+target_genes <- c(
+  "VITVri588271_v1.0.hap1.chr08.ver1.0.g199800",
+  "VITVri588271_v1.0.hap1.chr14.ver1.0.g309600",
+  "VITVrpB38_v1.0.hap1.chr16.ver1.0.g254000",
+  "VITVrpB38_v1.0.hap1.chr03.ver1.0.g048930",
+  "VITVri588271_v1.0.hap1.chr17.ver1.0.g346410",
+  "VITVri588271_v1.0.hap1.chr15.ver1.0.g321020",
+  "VITVrpB38_v1.0.hap1.chr07.ver1.0.g114630",
+  "VITVrpB38_v1.0.hap1.chr11.ver1.0.g178120",
+  "VITVrpB38_v1.0.hap1.chr14.ver1.0.g229570",
+  "VITVrpB38_v1.0.hap1.chr17.ver1.0.g265450"
+)
+
+target_labels <- c(
+  "g199800 | WRKY33-like",
+  "g309600 | SAG101-like",
+  "g254000 | receptor-like kinase",
+  "g048930 | carboxylesterase",
+  "g346410 | WAK-like kinase",
+  "g321020 | DMR6/DLO-family oxygenase",
+  "g114630 | CNL",
+  "g178120 | CNL/RLP",
+  "g229570 | SAG101-related",
+  "g265450 | EDS1-family"
+)
+
+names(target_labels) <- target_genes
+
+# Check all genes are present
+target_genes %in% rownames(expr_normalized)
+
+target_expr <- expr_normalized[
+  target_genes,
+  ,
+  drop = FALSE
+]
+
+rownames(target_expr) <- target_labels[
+  target_genes
+]
+
+pdf(
+  file.path(
+    OUT_DIR,
+    "focal_10_gene_heatmap_norm_exprs.pdf"
+  ),
+  width = 10,
+  height = 7
+)
+
+pheatmap(
+  target_expr,
+
+  scale = "none",
+
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+
+  annotation_col = annotation_col,
+
+  color = colorRampPalette(
+    c("blue", "white", "red")
+  )(50),
+
+  gaps_col = c(3, 6, 9, 11, 14),
+
+  fontsize_row = 9,
+  fontsize_col = 8,
+
+  angle_col = 45,
+
+  border_color = "grey85",
+
+  main = "Focal WGCNA-DIU candidate genes"
+)
+
+dev.off()
+
+
+
+
+
+
+# heatmap of just the EDS1-family and NLRs 
+
+immune_genes <- c(
+  "VITVri588271_v1.0.hap1.chr14.ver1.0.g309600",
+  "VITVrpB38_v1.0.hap1.chr14.ver1.0.g229570",
+  "VITVrpB38_v1.0.hap1.chr17.ver1.0.g265450",
+  "VITVrpB38_v1.0.hap1.chr07.ver1.0.g114630",
+  "VITVrpB38_v1.0.hap1.chr11.ver1.0.g178120"
+)
+
+immune_labels <- c(
+  "g309600 | SAG101-like",
+  "g229570 | SAG101-related",
+  "g265450 | EDS1-family",
+  "g114630 | CNL",
+  "g178120 | CNL/RLP"
+)
+
+names(immune_labels) <- immune_genes
+
+# Check all genes are present
+immune_genes %in% rownames(expr_normalized)
+
+immune_expr <- expr_normalized[
+  immune_genes,
+  ,
+  drop = FALSE
+]
+
+rownames(immune_expr) <- immune_labels[
+  immune_genes
+]
+
+pdf(
+  file.path(
+    OUT_DIR,
+    "EDS1_SAG101_CNL_heatmap_norm_exprs.pdf"
+  ),
+  width = 10,
+  height = 6
+)
+
+pheatmap(
+  immune_expr,
+
+  scale = "none",
+
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+
+  annotation_col = annotation_col,
+
+  color = colorRampPalette(
+    c("blue", "white", "red")
+  )(50),
+
+  gaps_col = c(3, 6, 9, 11, 14),
+
+  fontsize_row = 10,
+  fontsize_col = 8,
+
+  angle_col = 45,
+
+  border_color = "grey85",
+
+  main = "EDS1/SAG101-related and CNL candidates"
+)
+
+dev.off()
+
+
+
+
+
+
+
+
+# write a table to store the expression data 
+
+# ============================================================
+# Save sample-level normalized expression for 10 target genes
+# ============================================================
+
+target_expression_table <- data.frame(
+  Gene = rownames(target_expr),
+  target_expr,
+  check.names = FALSE
+)
+
+write.table(
+  target_expression_table,
+  file = file.path(
+    OUT_DIR,
+    "focal_10_genes_VST_normalized_expression.tsv"
+  ),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+target_expression_table
+
+
+
+
+
+# ============================================================
+# Mean normalized expression by genotype x treatment
+# ============================================================
+
+target_group_means <- data.frame(
+  Gene = rownames(target_expr),
+
+  `101-14_Control` = rowMeans(
+    target_expr[
+      ,
+      grep("^101-14_con_", colnames(target_expr)),
+      drop = FALSE
+    ]
+  ),
+
+  `101-14_Infested` = rowMeans(
+    target_expr[
+      ,
+      grep("^101-14_inf_", colnames(target_expr)),
+      drop = FALSE
+    ]
+  ),
+
+  `3309_Control` = rowMeans(
+    target_expr[
+      ,
+      grep("^3309_con_", colnames(target_expr)),
+      drop = FALSE
+    ]
+  ),
+
+  `3309_Infested` = rowMeans(
+    target_expr[
+      ,
+      grep("^3309_inf_", colnames(target_expr)),
+      drop = FALSE
+    ]
+  ),
+
+  `SW_Control` = rowMeans(
+    target_expr[
+      ,
+      grep("^sw_con_", colnames(target_expr)),
+      drop = FALSE
+    ]
+  ),
+
+  `SW_Infested` = rowMeans(
+    target_expr[
+      ,
+      grep("^sw_inf_", colnames(target_expr)),
+      drop = FALSE
+    ]
+  ),
+
+  check.names = FALSE
+)
+
+target_group_means
+
+
+
+write.table(
+  target_group_means,
+  file = file.path(
+    OUT_DIR,
+    "focal_10_genes_mean_VST_expression_by_group.tsv"
+  ),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+
+
+
+
+###
