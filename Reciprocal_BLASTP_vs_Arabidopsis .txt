@@ -1,0 +1,1609 @@
+### Perform reciprical BLAST searches for the EDS1, SAG101, and other focal genes against the Arabidopsis genome 
+### Script executed in command line, run via HPC bash
+
+
+# start interactive bash
+
+srun --mem=80g --cpus-per-task 1 --time=01:00:00 --pty bash -l
+
+
+
+# Check the files first to make sure you can extract the proteins /genes from the V rip X V rup reference 
+
+BASE="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+VDIR="/rhome/wcoll010/shared/pacbio/genomes/Vrip_X_Vrup"
+
+GENOME="$VDIR/Vrip_X_Vrup_genome.fasta"
+GTF="$VDIR/genome_reference.gtf"
+
+RBH="$BASE/reciprocal_BLAST_Arabidopsis"
+mkdir -p "$RBH"/{arabidopsis,vitis,blast,scripts}
+
+grep -c $'\tCDS\t' "$GTF"
+
+grep -m 5 $'\tCDS\t' "$GTF"
+
+
+
+
+# Generate the V rip X V rup reference protein fasta
+module load gffread
+
+
+RBH="$BASE/reciprocal_BLAST_Arabidopsis"
+
+mkdir -p \
+"$RBH/vitis" \
+"$RBH/arabidopsis" \
+"$RBH/blast" \
+"$RBH/scripts"
+
+gffread \
+  "$GTF" \
+  -g "$GENOME" \
+  -y "$RBH/vitis/Vrip_X_Vrup_reference_transcript_proteins.faa"
+
+
+
+grep -c '^>' \
+"$RBH/vitis/Vrip_X_Vrup_reference_transcript_proteins.faa"
+
+head -4 \
+"$RBH/vitis/Vrip_X_Vrup_reference_transcript_proteins.faa"
+
+
+
+
+# Download the Arabidopsis proteome 
+
+cd "$RBH/arabidopsis"
+
+wget \
+  https://ftp.ebi.ac.uk/ensemblgenomes/pub/release-63/plants/fasta/arabidopsis_thaliana/pep/Arabidopsis_thaliana.TAIR10.pep.all.fa.gz
+
+gunzip -c \
+  Arabidopsis_thaliana.TAIR10.pep.all.fa.gz \
+  > Arabidopsis_thaliana.TAIR10.pep.all.fa
+
+
+
+head -4 Arabidopsis_thaliana.TAIR10.pep.all.fa
+
+
+
+
+# extract the 5 proteins (2 proteins for gene DMR6/oxidoreductase g321020)
+
+module load seqkit
+seqkit grep \
+  -p 'VITVri588271_v1.0.hap1.chr14.ver1.0.g309600.t01' \
+  -p 'VITVrpB38_v1.0.hap1.chr17.ver1.0.g265450.t01' \
+  -p 'VITVrpB38_v1.0.hap1.chr14.ver1.0.g229570.t01' \
+  -p 'VITVri588271_v1.0.hap1.chr15.ver1.0.g321020.t01' \
+  -p 'VITVri588271_v1.0.hap1.chr15.ver1.0.g321020.t02' \
+  "$RBH/vitis/Vrip_X_Vrup_reference_transcript_proteins.faa" \
+  > "$RBH/vitis/Vitis_candidate_reference_proteins.faa"
+
+
+
+# check output
+grep '^>' \
+"$RBH/vitis/Vitis_candidate_reference_proteins.faa"
+
+
+
+# get protein lengths:
+
+seqkit fx2tab \
+  -n -l \
+  "$RBH/vitis/Vitis_candidate_reference_proteins.faa"
+  
+# VITVri588271_v1.0.hap1.chr14.ver1.0.g309600.t01	576
+# VITVri588271_v1.0.hap1.chr15.ver1.0.g321020.t01	280
+# VITVri588271_v1.0.hap1.chr15.ver1.0.g321020.t02	344
+# VITVrpB38_v1.0.hap1.chr14.ver1.0.g229570.t01	331
+# VITVrpB38_v1.0.hap1.chr17.ver1.0.g265450.t01	597
+
+
+
+
+
+
+## download the arabidopsis proteome
+
+module load ncbi_datasets/18.30.1  
+
+RBH="$BASE/reciprocal_BLAST_Arabidopsis"
+
+mkdir -p "$RBH/arabidopsis"
+
+cd "$RBH/arabidopsis"
+
+datasets download genome accession GCF_000001735.4 \
+  --include protein,gff3 \
+  --filename Arabidopsis_TAIR10.1.zip
+
+
+
+
+# unpack the download
+
+unzip -o Arabidopsis_TAIR10.1.zip \
+  -d Arabidopsis_TAIR10.1
+  
+  
+
+# set file paths before running blast
+ATH_PROT="$RBH/arabidopsis/Arabidopsis_TAIR10.1/ncbi_dataset/data/GCF_000001735.4/protein.faa"
+
+ATH_GFF="$RBH/arabidopsis/Arabidopsis_TAIR10.1/ncbi_dataset/data/GCF_000001735.4/genomic.gff"
+
+
+
+# extract all target arabidopsis protein isoforms 
+module load seqkit
+
+seqkit grep \
+  -p 'NP_190392.1' \
+  -p 'NP_001030829.1' \
+  -p 'NP_190811.1' \
+  -p 'NP_568307.3' \
+  -p 'NP_001078585.1' \
+  -p 'NP_851039.1' \
+  -p 'NP_197841.1' \
+  "$ATH_PROT" \
+  > "$RBH/arabidopsis/Arabidopsis_EDS1_PAD4_SAG101_DMR6_all_isoforms.faa"
+
+# check
+
+grep '^>' \
+"$RBH/arabidopsis/Arabidopsis_EDS1_PAD4_SAG101_DMR6_all_isoforms.faa"
+
+seqkit fx2tab -n -l \
+"$RBH/arabidopsis/Arabidopsis_EDS1_PAD4_SAG101_DMR6_all_isoforms.faa"
+
+
+
+
+
+
+
+
+
+
+
+### Create Arabidopsis BLAST database
+
+module load ncbi-blast
+
+blastp -version
+makeblastdb -version
+
+# blastp: 2.17.0+
+# Package: blast 2.17.0, build Jul  1 2025 08:59:18
+
+
+# create db
+makeblastdb \
+  -in "$ATH_PROT" \
+  -dbtype prot \
+  -parse_seqids \
+  -out "$RBH/arabidopsis/Arabidopsis_TAIR10.1_proteins"
+
+
+
+# blast the 4 Vitis genes (5 proteins) against the db
+
+blastp \
+  -query "$RBH/vitis/Vitis_candidate_reference_proteins.faa" \
+  -db "$RBH/arabidopsis/Arabidopsis_TAIR10.1_proteins" \
+  -evalue 1e-10 \
+  -max_target_seqs 25 \
+  -max_hsps 1 \
+  -outfmt "6 qseqid sseqid pident length qlen slen qcovs evalue bitscore" \
+  -out "$RBH/blast/Vitis_candidates_to_Arabidopsis_top25.tsv"
+
+
+
+# inspect blast result
+for q in \
+"VITVri588271_v1.0.hap1.chr14.ver1.0.g309600.t01" \
+"VITVrpB38_v1.0.hap1.chr17.ver1.0.g265450.t01" \
+"VITVrpB38_v1.0.hap1.chr14.ver1.0.g229570.t01" \
+"VITVri588271_v1.0.hap1.chr15.ver1.0.g321020.t01" \
+"VITVri588271_v1.0.hap1.chr15.ver1.0.g321020.t02"
+do
+    echo "===== $q ====="
+
+    awk -v q="$q" '$1 == q' \
+      "$RBH/blast/Vitis_candidates_to_Arabidopsis_top25.tsv" \
+      | head -10 \
+      | column -t
+
+    echo
+done
+
+
+
+
+
+
+
+
+
+
+
+### Make the Vitis blastdb
+### Then perform reverse blast search of top Vitis hits
+makeblastdb \
+  -in "$RBH/vitis/Vrip_X_Vrup_reference_transcript_proteins.faa" \
+  -dbtype prot \
+  -parse_seqids \
+  -out "$RBH/vitis/Vrip_X_Vrup_reference_proteins"
+  
+  
+  
+# run reverse blast search 
+
+blastp \
+  -query "$RBH/arabidopsis/Arabidopsis_RBH_targets_all.faa" \
+  -db "$RBH/vitis/Vrip_X_Vrup_reference_proteins" \
+  -evalue 1e-10 \
+  -max_target_seqs 25 \
+  -max_hsps 1 \
+  -outfmt "6 qseqid sseqid pident length qlen slen qcovs evalue bitscore" \
+  -out "$RBH/blast/Arabidopsis_targets_to_Vitis_top25.tsv"
+
+
+
+
+### inspect the results 
+
+for q in \
+"NP_190392.1" \
+"NP_001030829.1" \
+"NP_190811.1" \
+"NP_568307.3" \
+"NP_001078585.1" \
+"NP_851039.1" \
+"NP_197841.1" \
+"NP_192788.1" \
+"NP_192787.1"
+do
+    echo "===== $q ====="
+
+    awk -v q="$q" '
+        $1 == q || $1 == "ref|" q "|"
+    ' "$RBH/blast/Arabidopsis_targets_to_Vitis_top25.tsv" \
+      | head -10 \
+      | column -t
+
+    echo
+done
+
+
+# Only 1 gene is a true recipricol best hit: g309600 is strongly supported as SAG101-like
+
+# g309600 → SAG101 NP_568307.3 ; bit score 294; 97% query coverage; 36.4% identity
+
+# SAG101 NP_568307.3 → g309600 ; bit score 294; 97% query coverage
+
+
+
+# Found the V. rupestris ortholog too
+
+# V. rupestris:
+# g229560
+
+
+
+# g229570 is also a hit, but probably not the primary SAG101 ortholog
+# g229560 and g229570; they are adjacent annotation IDs on the same chromosome and same parental genome.
+# That raises a very plausible hypothesis: g229570 may be a tandemly duplicated, truncated, or otherwise derived SAG101-family paralog adjacent to the primary SAG101-like locus g229560.
+
+
+
+
+
+
+
+### Run a forward-validation BLAST of the strongest Vitis genes discovered by the reverse search back against the entire Arabidopsis proteome.
+
+
+BASE="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+RBH="$BASE/reciprocal_BLAST_Arabidopsis"
+
+VITIS_PROT="$RBH/vitis/Vrip_X_Vrup_reference_transcript_proteins.faa"
+
+ATH_DB="$RBH/arabidopsis/Arabidopsis_TAIR10.1_proteins"
+
+OUTDIR="$RBH/blast/reverse_hit_validation"
+
+mkdir -p "$OUTDIR"
+
+# ============================================================
+# Modules
+# ============================================================
+
+module load ncbi-blast/2.13.0+
+module load seqkit
+module load gffread
+
+
+echo "BLAST:"
+blastp -version | head -1
+
+echo "seqkit:"
+which seqkit
+
+echo
+
+
+# ============================================================
+# Perform reverse blast search with best vitis hits - test for reciprocal best hit
+# ============================================================
+
+TARGETS="$OUTDIR/Vitis_reverse_hit_candidates.txt"
+
+cat > "$TARGETS" << 'EOF'
+VITVrpB38_v1.0.hap1.chr14.ver1.0.g229560.t01
+VITVrpB38_v1.0.hap1.chr17.ver1.0.g265620.t02
+VITVri588271_v1.0.hap1.chr17.ver1.0.g351240.t01
+VITVrpB38_v1.0.hap1.chr07.ver1.0.g121180.t01
+VITVri588271_v1.0.hap1.chr07.ver1.0.g191950.t01
+VITVrpB38_v1.0.hap1.chr13.ver1.0.g204320.t01
+VITVri588271_v1.0.hap1.chr13.ver1.0.g282340.t01
+VITVrpB38_v1.0.hap1.chr16.ver1.0.g256720.t02
+VITVri588271_v1.0.hap1.chr16.ver1.0.g341590.t04
+VITVrpB38_v1.0.hap1.chr02.ver1.0.g034690.t01
+VITVri588271_v1.0.hap1.chr02.ver1.0.g088230.t01
+VITVri588271_v1.0.hap1.chr02.ver1.0.g088220.t01
+VITVrpB38_v1.0.hap1.chr15.ver1.0.g239770.t01
+EOF
+
+
+# ============================================================
+# Extract proteins
+# ============================================================
+
+QUERY="$OUTDIR/Vitis_reverse_hit_candidates.faa"
+
+seqkit grep \
+    -f "$TARGETS" \
+    "$VITIS_PROT" \
+    > "$QUERY"
+
+
+# ============================================================
+# Sanity checks
+# ============================================================
+
+N_EXPECTED=$(wc -l < "$TARGETS")
+N_FOUND=$(grep -c '^>' "$QUERY")
+
+echo "Expected proteins: $N_EXPECTED"
+echo "Extracted proteins: $N_FOUND"
+echo
+
+if [ "$N_EXPECTED" -ne "$N_FOUND" ]; then
+    echo "ERROR: Some requested proteins were not extracted."
+    echo
+    echo "Requested:"
+    cat "$TARGETS"
+    echo
+    echo "Found:"
+    grep '^>' "$QUERY"
+    exit 1
+fi
+
+
+echo "Protein lengths:"
+seqkit fx2tab -n -l "$QUERY"
+
+echo
+
+
+# ============================================================
+# Forward BLAST against complete Arabidopsis proteome
+# ============================================================
+
+RESULTS="$OUTDIR/Vitis_reverse_hits_to_Arabidopsis_top25.tsv"
+
+blastp \
+    -query "$QUERY" \
+    -db "$ATH_DB" \
+    -evalue 1e-10 \
+    -max_target_seqs 25 \
+    -max_hsps 1 \
+    -num_threads 4 \
+    -outfmt "6 qseqid sseqid pident length qlen slen qcovs evalue bitscore" \
+    -out "$RESULTS"
+
+
+echo
+echo "BLAST complete:"
+echo "$RESULTS"
+echo
+
+
+# ============================================================
+# Print top 5 Arabidopsis hits per Vitis protein
+# ============================================================
+
+while read -r q
+do
+    echo "============================================================"
+    echo "===== $q ====="
+    echo "============================================================"
+
+    awk -v q="$q" '$1 == q' "$RESULTS" \
+        | head -5 \
+        | column -t
+
+    echo
+
+done < "$TARGETS"
+
+
+echo "============================================================"
+echo "COMPLETE"
+echo "============================================================"
+
+
+
+
+
+## next: collapse the Vitis reference to one longest protein per gene, split it into the two parental proteomes, and run EDS1/PAD4/SAG101/DMR6/DLO1/DLO2 independently against each.
+
+nano "$RBH/scripts/make_parent_gene_proteomes.py"
+#!/usr/bin/env python3
+
+import re
+from pathlib import Path
+
+BASE = Path(
+    "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/"
+    "reciprocal_BLAST_Arabidopsis"
+)
+
+INFILE = (
+    BASE /
+    "vitis/Vrip_X_Vrup_reference_transcript_proteins.faa"
+)
+
+OUT_ALL = (
+    BASE /
+    "vitis/Vrip_X_Vrup_longest_protein_per_gene.faa"
+)
+
+OUT_VRP = (
+    BASE /
+    "vitis/VrpB38_longest_protein_per_gene.faa"
+)
+
+OUT_VRI = (
+    BASE /
+    "vitis/Vri588271_longest_protein_per_gene.faa"
+)
+
+OUT_MAP = (
+    BASE /
+    "vitis/Vrip_X_Vrup_gene_representatives.tsv"
+)
+
+
+def read_fasta(path):
+
+    header = None
+    seq = []
+
+    with open(path) as f:
+
+        for line in f:
+
+            line = line.rstrip()
+
+            if not line:
+                continue
+
+            if line.startswith(">"):
+
+                if header is not None:
+                    yield header, "".join(seq)
+
+                header = line[1:]
+                seq = []
+
+            else:
+                seq.append(line)
+
+        if header is not None:
+            yield header, "".join(seq)
+
+
+best = {}
+
+for header, seq in read_fasta(INFILE):
+
+    transcript = header.split()[0]
+
+    # e.g.
+    # ...g265620.t02 -> ...g265620
+    gene = re.sub(r"\.t\d+$", "", transcript)
+
+    if gene.startswith("VITVrpB38_"):
+        parent = "VrpB38"
+
+    elif gene.startswith("VITVri588271_"):
+        parent = "Vri588271"
+
+    else:
+        parent = "other"
+
+    current = best.get(gene)
+
+    if (
+        current is None
+        or len(seq) > len(current["seq"])
+        or (
+            len(seq) == len(current["seq"])
+            and transcript < current["transcript"]
+        )
+    ):
+        best[gene] = {
+            "gene": gene,
+            "transcript": transcript,
+            "parent": parent,
+            "seq": seq
+        }
+
+
+print("Total genes:", len(best))
+
+print(
+    "VrpB38 genes:",
+    sum(x["parent"] == "VrpB38" for x in best.values())
+)
+
+print(
+    "Vri588271 genes:",
+    sum(x["parent"] == "Vri588271" for x in best.values())
+)
+
+
+def write_fasta(records, path):
+
+    with open(path, "w") as out:
+
+        for x in records:
+
+            out.write(
+                f">{x['gene']} "
+                f"transcript={x['transcript']} "
+                f"length={len(x['seq'])}\n"
+            )
+
+            seq = x["seq"]
+
+            for i in range(0, len(seq), 60):
+                out.write(seq[i:i+60] + "\n")
+
+
+records = [
+    best[g]
+    for g in sorted(best)
+]
+
+write_fasta(
+    records,
+    OUT_ALL
+)
+
+write_fasta(
+    [x for x in records if x["parent"] == "VrpB38"],
+    OUT_VRP
+)
+
+write_fasta(
+    [x for x in records if x["parent"] == "Vri588271"],
+    OUT_VRI
+)
+
+
+with open(OUT_MAP, "w") as out:
+
+    out.write(
+        "Gene_ID\tRepresentative_Transcript\t"
+        "Parent\tProtein_Length_aa\n"
+    )
+
+    for x in records:
+
+        out.write(
+            f"{x['gene']}\t"
+            f"{x['transcript']}\t"
+            f"{x['parent']}\t"
+            f"{len(x['seq'])}\n"
+        )
+
+
+print("\nWritten:")
+print(OUT_ALL)
+print(OUT_VRP)
+print(OUT_VRI)
+print(OUT_MAP)
+
+python3 "$RBH/scripts/make_parent_gene_proteomes.py"
+
+
+
+
+
+
+
+
+### now run parent-specific RBH
+
+#!/bin/bash
+
+set -euo pipefail
+
+# ============================================================
+# Paths
+# ============================================================
+
+BASE="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+RBH="$BASE/reciprocal_BLAST_Arabidopsis"
+
+ATH_PROT="$RBH/arabidopsis/Arabidopsis_TAIR10.1/ncbi_dataset/data/GCF_000001735.4/protein.faa"
+
+ATH_DB="$RBH/arabidopsis/Arabidopsis_TAIR10.1_proteins"
+
+VRP_FASTA="$RBH/vitis/VrpB38_longest_protein_per_gene.faa"
+VRI_FASTA="$RBH/vitis/Vri588271_longest_protein_per_gene.faa"
+
+OUTDIR="$RBH/blast/parent_specific_RBH"
+
+mkdir -p "$OUTDIR"
+
+module load ncbi-blast/2.13.0+
+
+echo "BLAST version:"
+blastp -version | head -1
+echo
+
+
+# ============================================================
+# Arabidopsis full-length reference proteins
+#
+# EDS1   AT3G48090
+# PAD4   AT3G52430
+# SAG101 AT5G14930
+# DMR6   AT5G24530
+# DLO1   AT4G10500
+# DLO2   AT4G10490
+# ============================================================
+
+ATH_QUERY="$OUTDIR/Arabidopsis_core_queries.faa"
+
+seqkit grep \
+    -p 'NP_190392.1' \
+    -p 'NP_190811.1' \
+    -p 'NP_568307.3' \
+    -p 'NP_197841.1' \
+    -p 'NP_192788.1' \
+    -p 'NP_192787.1' \
+    "$ATH_PROT" \
+    > "$ATH_QUERY"
+
+
+echo "Arabidopsis queries:"
+seqkit fx2tab -n -l "$ATH_QUERY"
+echo
+
+
+# ============================================================
+# Build gene-level parental databases
+# ============================================================
+
+makeblastdb \
+    -in "$VRP_FASTA" \
+    -dbtype prot \
+    -parse_seqids \
+    -out "$OUTDIR/VrpB38_gene_db" \
+    >/dev/null
+
+makeblastdb \
+    -in "$VRI_FASTA" \
+    -dbtype prot \
+    -parse_seqids \
+    -out "$OUTDIR/Vri588271_gene_db" \
+    >/dev/null
+
+
+# ============================================================
+# Arabidopsis -> each parental proteome
+# ============================================================
+
+for parent in VrpB38 Vri588271
+do
+
+    if [ "$parent" = "VrpB38" ]; then
+        DB="$OUTDIR/VrpB38_gene_db"
+    else
+        DB="$OUTDIR/Vri588271_gene_db"
+    fi
+
+    blastp \
+        -query "$ATH_QUERY" \
+        -db "$DB" \
+        -evalue 1e-10 \
+        -max_target_seqs 10 \
+        -max_hsps 1 \
+        -num_threads 4 \
+        -outfmt "6 qseqid sseqid pident length qlen slen qcovs evalue bitscore" \
+        -out "$OUTDIR/Arabidopsis_to_${parent}_top10.tsv"
+
+done
+
+
+# ============================================================
+# Print reverse results
+# ============================================================
+
+for parent in VrpB38 Vri588271
+do
+
+    FILE="$OUTDIR/Arabidopsis_to_${parent}_top10.tsv"
+
+    echo
+    echo "############################################################"
+    echo "### Arabidopsis -> $parent"
+    echo "############################################################"
+
+    for q in \
+        NP_190392.1 \
+        NP_190811.1 \
+        NP_568307.3 \
+        NP_197841.1 \
+        NP_192788.1 \
+        NP_192787.1
+    do
+
+        echo
+        echo "===== $q ====="
+
+        awk -v q="$q" '$1 == q' "$FILE" \
+            | head -5 \
+            | column -t
+
+    done
+
+done
+
+
+# ============================================================
+# Get highest-bit-score Vitis gene for each Arabidopsis query
+# from each parental genome
+# ============================================================
+
+for parent in VrpB38 Vri588271
+do
+
+    FILE="$OUTDIR/Arabidopsis_to_${parent}_top10.tsv"
+
+    awk '
+    {
+        q=$1
+        score=$9
+
+        if (!(q in best) || score > best[q]) {
+            best[q]=score
+            hit[q]=$2
+        }
+    }
+    END {
+        for (q in hit)
+            print hit[q]
+    }
+    ' "$FILE" \
+        | sort -u \
+        > "$OUTDIR/${parent}_reverse_best_genes.txt"
+
+done
+
+
+# ============================================================
+# Extract those Vitis proteins
+# ============================================================
+
+seqkit grep \
+    -f "$OUTDIR/VrpB38_reverse_best_genes.txt" \
+    "$VRP_FASTA" \
+    > "$OUTDIR/VrpB38_reverse_best_genes.faa"
+
+seqkit grep \
+    -f "$OUTDIR/Vri588271_reverse_best_genes.txt" \
+    "$VRI_FASTA" \
+    > "$OUTDIR/Vri588271_reverse_best_genes.faa"
+
+
+echo
+echo "############################################################"
+echo "Reverse-best VrpB38 genes"
+echo "############################################################"
+
+seqkit fx2tab -n -l \
+    "$OUTDIR/VrpB38_reverse_best_genes.faa"
+
+echo
+echo "############################################################"
+echo "Reverse-best Vri588271 genes"
+echo "############################################################"
+
+seqkit fx2tab -n -l \
+    "$OUTDIR/Vri588271_reverse_best_genes.faa"
+
+
+# ============================================================
+# Vitis reverse-best genes -> complete Arabidopsis proteome
+#
+# This completes the reciprocal test.
+# ============================================================
+
+for parent in VrpB38 Vri588271
+do
+
+    blastp \
+        -query "$OUTDIR/${parent}_reverse_best_genes.faa" \
+        -db "$ATH_DB" \
+        -evalue 1e-10 \
+        -max_target_seqs 10 \
+        -max_hsps 1 \
+        -num_threads 4 \
+        -outfmt "6 qseqid sseqid pident length qlen slen qcovs evalue bitscore" \
+        -out "$OUTDIR/${parent}_reverse_best_to_Arabidopsis_top10.tsv"
+
+done
+
+
+# ============================================================
+# Print forward-validation results
+# ============================================================
+
+for parent in VrpB38 Vri588271
+do
+
+    FILE="$OUTDIR/${parent}_reverse_best_to_Arabidopsis_top10.tsv"
+
+    echo
+    echo "############################################################"
+    echo "### $parent reverse-best genes -> Arabidopsis"
+    echo "############################################################"
+
+    cut -f1 "$FILE" | sort -u | while read -r q
+    do
+
+        echo
+        echo "===== $q ====="
+
+        awk -v q="$q" '$1 == q' "$FILE" \
+            | head -5 \
+            | column -t
+
+    done
+
+done
+
+
+echo
+echo "============================================================"
+echo "COMPLETE"
+echo "============================================================"
+echo
+echo "Results:"
+echo "$OUTDIR"
+
+
+
+
+
+# results 
+| Arabidopsis gene | V. rupestris best counterpart | V. riparia best counterpart  | RBH interpretation                                                |
+| ---------------- | ----------------------------- | ---------------------------- | ----------------------------------------------------------------- |
+| **SAG101**       | `g229560`                     | `g309600`                    | strong parent-specific RBH support                                |
+| **PAD4**         | `g121180`                     | `g191950`                    | strong parent-specific RBH support                                |
+| **EDS1**         | `g265620`                     | `g351240`                    | strong parent-specific gene-level RBH support                     |
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Check how close the SAG101 homologs in Vitis rupestris are to one another - close by suggest a grapevine duplication relative to arabidopsis
+### This additional analysis of the V rupestris SAG101 loci is not included in the final draft of the manuscript, but showed that V rupestris also has SAG101 duplication, but unlike V riparia haplotype 1 annoation, it is annotated as two different gene models. 
+
+#!/bin/bash
+
+set -euo pipefail
+
+BASE="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+RBH="$BASE/reciprocal_BLAST_Arabidopsis"
+
+GTF="/rhome/wcoll010/shared/pacbio/genomes/Vrip_X_Vrup/genome_reference.gtf"
+
+OUT="$RBH/blast/candidate_gene_coordinates.tsv"
+
+echo -e "Gene_ID\tChromosome\tStart\tEnd\tStrand" > "$OUT"
+
+genes=(
+"VITVri588271_v1.0.hap1.chr14.ver1.0.g309600"
+"VITVrpB38_v1.0.hap1.chr14.ver1.0.g229560"
+"VITVrpB38_v1.0.hap1.chr14.ver1.0.g229570"
+
+"VITVrpB38_v1.0.hap1.chr17.ver1.0.g265450"
+"VITVrpB38_v1.0.hap1.chr17.ver1.0.g265620"
+"VITVri588271_v1.0.hap1.chr17.ver1.0.g351240"
+
+"VITVri588271_v1.0.hap1.chr15.ver1.0.g321020"
+"VITVrpB38_v1.0.hap1.chr15.ver1.0.g239770"
+
+"VITVrpB38_v1.0.hap1.chr13.ver1.0.g204320"
+"VITVri588271_v1.0.hap1.chr13.ver1.0.g282340"
+
+"VITVrpB38_v1.0.hap1.chr02.ver1.0.g034690"
+"VITVri588271_v1.0.hap1.chr02.ver1.0.g088230"
+)
+
+for gene in "${genes[@]}"
+do
+
+    awk -F'\t' -v gene="$gene" '
+    BEGIN {
+        min = 999999999999
+        max = 0
+        chr = ""
+        strand = ""
+        found = 0
+    }
+
+    $9 ~ ("gene_id \"" gene "\"") {
+
+        found = 1
+        chr = $1
+        strand = $7
+
+        if ($4 < min)
+            min = $4
+
+        if ($5 > max)
+            max = $5
+    }
+
+    END {
+        if (found)
+            print gene "\t" chr "\t" min "\t" max "\t" strand
+        else
+            print gene "\tNA\tNA\tNA\tNA"
+    }
+    ' "$GTF" >> "$OUT"
+
+done
+
+column -t "$OUT"
+
+
+
+
+
+
+
+# result: they are very close together: 
+
+# g229560 and g229570 are genuine neighboring SAG101-family paralogs, perhaps from tandem duplication.
+# The reference annotation has split one biological SAG101-family locus into two gene models.
+
+
+
+
+# How similar are their proteins?
+# Does g229570 correspond to only part of g229560?
+# Do your long-read PB transcripts bridge the two reference annotations?
+
+
+#!/bin/bash
+
+set -euo pipefail
+
+BASE="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+RBH="$BASE/reciprocal_BLAST_Arabidopsis"
+
+REF_GTF="/rhome/wcoll010/shared/pacbio/genomes/Vrip_X_Vrup/genome_reference.gtf"
+
+ISO_GTF="$BASE/sqanti_results/Vrip_X_Vrup_sqanti/filter_results/Vrip_X_Vrup_filtered.filtered.gtf"
+
+REF_PROT="$RBH/vitis/Vrip_X_Vrup_reference_transcript_proteins.faa"
+
+OUTDIR="$RBH/SAG101_g229560_g229570_check"
+
+mkdir -p "$OUTDIR"
+
+module load ncbi-blast/2.13.0+
+
+# ============================================================
+# IDs
+# ============================================================
+
+G1="VITVrpB38_v1.0.hap1.chr14.ver1.0.g229560"
+G2="VITVrpB38_v1.0.hap1.chr14.ver1.0.g229570"
+
+T1="${G1}.t01"
+T2="${G2}.t01"
+
+
+# ============================================================
+# 1. Extract the two reference proteins
+# ============================================================
+
+seqkit grep \
+    -p "$T1" \
+    "$REF_PROT" \
+    > "$OUTDIR/g229560.faa"
+
+seqkit grep \
+    -p "$T2" \
+    "$REF_PROT" \
+    > "$OUTDIR/g229570.faa"
+
+
+echo "============================================================"
+echo "REFERENCE PROTEIN LENGTHS"
+echo "============================================================"
+
+seqkit fx2tab -n -l \
+    "$OUTDIR/g229560.faa" \
+    "$OUTDIR/g229570.faa"
+
+echo
+
+
+# ============================================================
+# 2. Pairwise BLASTP
+#
+# g229570 is query so qcovs tells us how much of the short
+# protein can be aligned to g229560.
+# ============================================================
+
+blastp \
+    -query "$OUTDIR/g229570.faa" \
+    -subject "$OUTDIR/g229560.faa" \
+    -evalue 1e-5 \
+    -max_hsps 10 \
+    -outfmt "6 qseqid sseqid pident length qlen slen qstart qend sstart send evalue bitscore" \
+    > "$OUTDIR/g229570_vs_g229560_blastp.tsv"
+
+
+echo "============================================================"
+echo "g229570 protein vs g229560 protein"
+echo "============================================================"
+
+column -t \
+    "$OUTDIR/g229570_vs_g229560_blastp.tsv"
+
+echo
+
+
+# ============================================================
+# 3. Print reference annotation for both genes
+# ============================================================
+
+echo "============================================================"
+echo "REFERENCE GENE MODELS"
+echo "============================================================"
+
+grep -E "${G1}|${G2}" "$REF_GTF" \
+    > "$OUTDIR/g229560_g229570_reference_GTF.tsv"
+
+grep -E "${G1}|${G2}" "$REF_GTF"
+
+echo
+
+
+# ============================================================
+# 4. Local genomic neighborhood
+#
+# locus + 20 kb on either side
+# ============================================================
+
+CHR="VITVrpB38_v1.0.hap1.chr14"
+START=30957955
+END=31006837
+
+python3 - "$REF_GTF" "$CHR" "$START" "$END" \
+"$OUTDIR/reference_genes_local_20kb.tsv" << 'PY'
+
+import sys
+import re
+from collections import defaultdict
+
+gtf, chrom, start, end, outfile = sys.argv[1:]
+start = int(start)
+end = int(end)
+
+genes = defaultdict(lambda: {
+    "start": 10**20,
+    "end": 0,
+    "strand": None
+})
+
+with open(gtf) as f:
+    for line in f:
+        if line.startswith("#"):
+            continue
+
+        x = line.rstrip().split("\t")
+
+        if len(x) != 9:
+            continue
+
+        if x[0] != chrom:
+            continue
+
+        s = int(x[3])
+        e = int(x[4])
+
+        if e < start or s > end:
+            continue
+
+        m = re.search(r'gene_id "([^"]+)"', x[8])
+
+        if not m:
+            continue
+
+        gene = m.group(1)
+
+        genes[gene]["start"] = min(
+            genes[gene]["start"], s
+        )
+
+        genes[gene]["end"] = max(
+            genes[gene]["end"], e
+        )
+
+        genes[gene]["strand"] = x[6]
+
+
+with open(outfile, "w") as out:
+
+    out.write(
+        "Gene_ID\tStart\tEnd\tLength_bp\tStrand\n"
+    )
+
+    for gene, d in sorted(
+        genes.items(),
+        key=lambda z: z[1]["start"]
+    ):
+
+        length = d["end"] - d["start"] + 1
+
+        out.write(
+            f"{gene}\t"
+            f"{d['start']}\t"
+            f"{d['end']}\t"
+            f"{length}\t"
+            f"{d['strand']}\n"
+        )
+
+PY
+
+
+echo "============================================================"
+echo "REFERENCE GENES WITHIN LOCAL WINDOW"
+echo "============================================================"
+
+column -t \
+    "$OUTDIR/reference_genes_local_20kb.tsv"
+
+echo
+
+
+# ============================================================
+# 5. Find all Iso-Seq transcripts overlapping the same locus
+#
+# This is the critical test for whether PB transcripts bridge
+# the g229560 / g229570 annotation boundary.
+# ============================================================
+
+python3 - "$ISO_GTF" "$CHR" "$START" "$END" \
+"$OUTDIR/IsoSeq_transcripts_local_20kb.tsv" << 'PY'
+
+import sys
+import re
+from collections import defaultdict
+
+gtf, chrom, start, end, outfile = sys.argv[1:]
+start = int(start)
+end = int(end)
+
+tx = defaultdict(lambda: {
+    "start": 10**20,
+    "end": 0,
+    "strand": None,
+    "exons": 0
+})
+
+with open(gtf) as f:
+
+    for line in f:
+
+        if line.startswith("#"):
+            continue
+
+        x = line.rstrip().split("\t")
+
+        if len(x) != 9:
+            continue
+
+        if x[0] != chrom:
+            continue
+
+        s = int(x[3])
+        e = int(x[4])
+
+        if e < start or s > end:
+            continue
+
+        m = re.search(
+            r'transcript_id "([^"]+)"',
+            x[8]
+        )
+
+        if not m:
+            continue
+
+        transcript = m.group(1)
+
+        tx[transcript]["start"] = min(
+            tx[transcript]["start"], s
+        )
+
+        tx[transcript]["end"] = max(
+            tx[transcript]["end"], e
+        )
+
+        tx[transcript]["strand"] = x[6]
+
+        if x[2] == "exon":
+            tx[transcript]["exons"] += 1
+
+
+with open(outfile, "w") as out:
+
+    out.write(
+        "Transcript_ID\tStart\tEnd\t"
+        "Span_bp\tStrand\tExon_Count\n"
+    )
+
+    for transcript, d in sorted(
+        tx.items(),
+        key=lambda z: z[1]["start"]
+    ):
+
+        span = d["end"] - d["start"] + 1
+
+        out.write(
+            f"{transcript}\t"
+            f"{d['start']}\t"
+            f"{d['end']}\t"
+            f"{span}\t"
+            f"{d['strand']}\t"
+            f"{d['exons']}\n"
+        )
+
+PY
+
+
+echo "============================================================"
+echo "ISO-SEQ TRANSCRIPTS IN LOCAL REGION"
+echo "============================================================"
+
+column -t \
+    "$OUTDIR/IsoSeq_transcripts_local_20kb.tsv"
+
+echo
+echo "============================================================"
+echo "COMPLETE"
+echo "============================================================"
+
+
+
+
+
+
+# Next: Does the same PB transcript contain at least one exon overlapping g229560 and at least one exon overlapping g229570?
+
+nano "$RBH/scripts/check_SAG101_exon_bridging.py"
+
+
+
+#!/usr/bin/env python3
+
+import re
+from collections import defaultdict
+from pathlib import Path
+
+BASE = Path(
+    "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+)
+
+RBH = BASE / "reciprocal_BLAST_Arabidopsis"
+
+ISO_GTF = (
+    BASE /
+    "sqanti_results/Vrip_X_Vrup_sqanti/filter_results/"
+    "Vrip_X_Vrup_filtered.filtered.gtf"
+)
+
+OUTDIR = RBH / "SAG101_g229560_g229570_check"
+OUTDIR.mkdir(parents=True, exist_ok=True)
+
+OUT = OUTDIR / "IsoSeq_exon_bridge_classification.tsv"
+
+CHR = "VITVrpB38_v1.0.hap1.chr14"
+
+# Reference gene boundaries
+G1_START = 30977955
+G1_END   = 30984486
+
+G2_START = 30985426
+G2_END   = 30986837
+
+
+def overlaps(a1, a2, b1, b2):
+    return a1 <= b2 and a2 >= b1
+
+
+# ------------------------------------------------------------
+# Collect exon coordinates for every transcript in this region
+# ------------------------------------------------------------
+
+tx_exons = defaultdict(list)
+tx_strand = {}
+
+with open(ISO_GTF) as f:
+
+    for line in f:
+
+        if line.startswith("#"):
+            continue
+
+        fields = line.rstrip().split("\t")
+
+        if len(fields) != 9:
+            continue
+
+        chrom = fields[0]
+        feature = fields[2]
+
+        if chrom != CHR or feature != "exon":
+            continue
+
+        start = int(fields[3])
+        end = int(fields[4])
+
+        # Ignore exons completely outside the local region
+        if end < G1_START - 5000:
+            continue
+
+        if start > G2_END + 20000:
+            continue
+
+        m = re.search(
+            r'transcript_id "([^"]+)"',
+            fields[8]
+        )
+
+        if not m:
+            continue
+
+        tx = m.group(1)
+
+        tx_exons[tx].append(
+            (start, end)
+        )
+
+        tx_strand[tx] = fields[6]
+
+
+# ------------------------------------------------------------
+# Classify each transcript
+# ------------------------------------------------------------
+
+rows = []
+
+for tx, exons in tx_exons.items():
+
+    exons = sorted(exons)
+
+    hit_g1 = []
+    hit_g2 = []
+
+    for i, (start, end) in enumerate(exons, start=1):
+
+        if overlaps(
+            start, end,
+            G1_START, G1_END
+        ):
+            hit_g1.append(i)
+
+        if overlaps(
+            start, end,
+            G2_START, G2_END
+        ):
+            hit_g2.append(i)
+
+    overlaps_g1 = len(hit_g1) > 0
+    overlaps_g2 = len(hit_g2) > 0
+
+    if overlaps_g1 and overlaps_g2:
+        classification = "BRIDGES_BOTH"
+
+    elif overlaps_g1:
+        classification = "G229560_ONLY"
+
+    elif overlaps_g2:
+        classification = "G229570_ONLY"
+
+    else:
+        classification = "NEITHER"
+
+    exon_string = ";".join(
+        f"{s}-{e}"
+        for s, e in exons
+    )
+
+    rows.append([
+        tx,
+        tx_strand.get(tx, ""),
+        min(s for s, e in exons),
+        max(e for s, e in exons),
+        len(exons),
+        overlaps_g1,
+        overlaps_g2,
+        ",".join(map(str, hit_g1)) if hit_g1 else "",
+        ",".join(map(str, hit_g2)) if hit_g2 else "",
+        classification,
+        exon_string
+    ])
+
+
+rows.sort(
+    key=lambda x: (x[2], x[3], x[0])
+)
+
+
+with open(OUT, "w") as out:
+
+    out.write(
+        "Transcript_ID\t"
+        "Strand\t"
+        "Start\t"
+        "End\t"
+        "Exon_Count\t"
+        "Overlaps_g229560\t"
+        "Overlaps_g229570\t"
+        "g229560_Exon_Numbers\t"
+        "g229570_Exon_Numbers\t"
+        "Classification\t"
+        "Exon_Coordinates\n"
+    )
+
+    for row in rows:
+        out.write(
+            "\t".join(map(str, row)) +
+            "\n"
+        )
+
+
+# ------------------------------------------------------------
+# Console summary
+# ------------------------------------------------------------
+
+counts = defaultdict(int)
+
+for row in rows:
+    counts[row[9]] += 1
+
+
+print("==============================================")
+print("TRANSCRIPT CLASSIFICATION")
+print("==============================================")
+
+for key in [
+    "BRIDGES_BOTH",
+    "G229560_ONLY",
+    "G229570_ONLY",
+    "NEITHER"
+]:
+    print(
+        f"{key}: {counts[key]}"
+    )
+
+
+print()
+print("==============================================")
+print("TRANSCRIPTS WITH EXONS IN BOTH GENE MODELS")
+print("==============================================")
+
+for row in rows:
+
+    if row[9] == "BRIDGES_BOTH":
+
+        print(
+            row[0],
+            f"exons={row[4]}",
+            f"g229560_exons={row[7]}",
+            f"g229570_exons={row[8]}",
+            f"coords={row[10]}",
+            sep="\t"
+        )
+
+
+print()
+print("Output:")
+print(OUT)
+
+python3 "$RBH/scripts/check_SAG101_exon_bridging.py"
+
+
+
+
+# Results are printed below 
+==============================================
+TRANSCRIPT CLASSIFICATION
+==============================================
+BRIDGES_BOTH: 13
+G229560_ONLY: 33
+G229570_ONLY: 44
+NEITHER: 55
+
+==============================================
+TRANSCRIPTS WITH EXONS IN BOTH GENE MODELS
+==============================================
+PB.41680.9	exons=2	g229560_exons=1	g229570_exons=2	coords=30977978-30978059;30985551-30986840
+PB.41680.35	exons=3	g229560_exons=1	g229570_exons=2	coords=30981739-30981783;30986208-30986756;30994366-30995373
+PB.41680.41	exons=3	g229560_exons=1	g229570_exons=2	coords=30981748-30981783;30986208-30986756;30994366-30995265
+PB.41680.81	exons=3	g229560_exons=1	g229570_exons=2	coords=30981870-30981931;30986208-30986756;30994366-30995382
+PB.41680.91	exons=3	g229560_exons=1	g229570_exons=2	coords=30981991-30982041;30986208-30986756;30994366-30995378
+PB.41680.99	exons=3	g229560_exons=1	g229570_exons=2	coords=30982240-30982468;30986208-30986756;30994366-30995373
+PB.41680.106	exons=3	g229560_exons=1	g229570_exons=2	coords=30982379-30982468;30986208-30986756;30994366-30995382
+PB.41680.110	exons=3	g229560_exons=1	g229570_exons=2	coords=30982410-30982678;30986208-30986756;30994366-30995378
+PB.41680.112	exons=3	g229560_exons=1	g229570_exons=2	coords=30982443-30982468;30986208-30986756;30994366-30995373
+PB.41680.123	exons=3	g229560_exons=1	g229570_exons=2	coords=30982551-30982672;30986208-30986756;30994366-30995372
+PB.41680.127	exons=3	g229560_exons=1	g229570_exons=2	coords=30982570-30982678;30986208-30986756;30994366-30995373
+PB.41680.131	exons=3	g229560_exons=1	g229570_exons=2	coords=30982627-30982678;30986208-30986756;30994366-30995383
+PB.41680.133	exons=3	g229560_exons=1	g229570_exons=2	coords=30982640-30982672;30986208-30986756;30994366-30995275
+
+Output saved to:
+/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/reciprocal_BLAST_Arabidopsis/SAG101_g229560_g229570_check/IsoSeq_exon_bridge_classification.tsv
+
+
+
+
+
+###
