@@ -1,0 +1,8182 @@
+### Running AlphaFold 3 to model SAG101-EDS1 interaction across different isoforms
+
+
+# First check behavior of the AlphaFold3 module 
+
+# set WD
+cd /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2
+
+
+# load module
+module load alphafold/3.0.2
+
+echo "ALPHAFOLD_SING=$ALPHAFOLD_SING"
+echo "ALPHAFOLD_DB=$ALPHAFOLD_DB"
+
+ls -lh "$ALPHAFOLD_SING"
+
+ls "$ALPHAFOLD_DB" | head
+
+
+
+singularity exec "$ALPHAFOLD_SING" \
+python3 /app/alphafold/run_alphafold.py --help \
+| grep -E "json_path|input_dir|output_dir|model_dir|run_data_pipeline|run_inference|num_diffusion|seed"
+
+
+
+singularity exec "$ALPHAFOLD_SING" \
+python3 - <<'PY'
+import alphafold3
+print("alphafold3 import OK")
+PY
+
+
+
+
+
+# extract the V riparia proteins we need for SAG101, EDS1, PAD4
+
+PRIMARY: EDS1–SAG101
+EDS1_P1  × SAG101_P9
+EDS1_P1  × SAG101_P12
+EDS1_P2  × SAG101_P9
+EDS1_P2  × SAG101_P12
+EDS1_P17 × SAG101_P9
+EDS1_P17 × SAG101_P12
+
+SECONDARY: EDS1–PAD4
+EDS1_P1  × PAD4_A
+EDS1_P1  × PAD4_B
+EDS1_P2  × PAD4_A
+EDS1_P2  × PAD4_B
+EDS1_P17 × PAD4_A
+EDS1_P17 × PAD4_B
+
+
+
+
+
+# set directory 
+
+BASE="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+AFDIR="$BASE/WGCNA_Vrip_X_Vrup/signed_network/candidate_architecture/AlphaFold3_EDS1_SAG101_PAD4"
+
+mkdir -p "$AFDIR"/{sequences,json,outputs,logs,summary}
+
+
+
+
+EDS1_FASTA="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/WGCNA_Vrip_X_Vrup/signed_network/candidate_architecture/EDS1_g351040_analysis/step1_protein_comparison/EDS1_g351040_three_focal_proteins.faa"
+
+PAD4_FASTA="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/WGCNA_Vrip_X_Vrup/signed_network/candidate_architecture/PAD4_g191950_analysis/step1_protein_comparison/PAD4_g191950_three_focal_proteins.faa"
+
+SAG101_FASTA="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/WGCNA_Vrip_X_Vrup/signed_network/candidate_architecture/g309600_locus_validation/two_unit_analysis/g309600_representative_upstream_downstream_proteins.faa"
+
+
+
+# confirm protein fasta headers 
+echo "===== EDS1 ====="
+grep '^>' "$EDS1_FASTA"
+
+echo
+echo "===== PAD4 ====="
+grep '^>' "$PAD4_FASTA"
+
+echo
+echo "===== SAG101 ====="
+grep '^>' "$SAG101_FASTA"
+
+
+
+
+
+
+# set up alphaFold job
+
+
+nano setup_AlphaFold3_EDS1_SAG101_PAD4.py
+
+
+#!/usr/bin/env python3
+
+# ============================================================
+# ALPHAFOLD 3 SETUP
+#
+# EDS1-SAG101 primary analysis
+# EDS1-PAD4 secondary comparison
+#
+# Creates:
+#   - 7 clean protein FASTAs
+#   - 12 AlphaFold3 JSON input files
+#   - job manifest
+#
+# Protein set:
+#
+#   EDS1_P1
+#   EDS1_P2
+#   EDS1_P17
+#
+#   SAG101_P9
+#   SAG101_P12
+#
+#   PAD4_A
+#   PAD4_B
+#
+# ============================================================
+
+from pathlib import Path
+import json
+import re
+
+
+# ============================================================
+# 1. PATHS
+# ============================================================
+
+BASE = Path(
+    "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+)
+
+CAND = (
+    BASE
+    / "WGCNA_Vrip_X_Vrup"
+    / "signed_network"
+    / "candidate_architecture"
+)
+
+AFDIR = (
+    CAND
+    / "AlphaFold3_EDS1_SAG101_PAD4"
+)
+
+SEQDIR = AFDIR / "sequences"
+JSONDIR = AFDIR / "json"
+OUTDIR = AFDIR / "outputs"
+LOGDIR = AFDIR / "logs"
+SUMMARYDIR = AFDIR / "summary"
+
+
+for directory in [
+    AFDIR,
+    SEQDIR,
+    JSONDIR,
+    OUTDIR,
+    LOGDIR,
+    SUMMARYDIR
+]:
+    directory.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+
+# ============================================================
+# 2. SOURCE FASTAS
+# ============================================================
+
+EDS1_FASTA = (
+    CAND
+    / "EDS1_g351040_analysis"
+    / "step1_protein_comparison"
+    / "EDS1_g351040_three_focal_proteins.faa"
+)
+
+PAD4_FASTA = (
+    CAND
+    / "PAD4_g191950_analysis"
+    / "step1_protein_comparison"
+    / "PAD4_g191950_three_focal_proteins.faa"
+)
+
+SAG101_FASTA = (
+    CAND
+    / "g309600_locus_validation"
+    / "two_unit_analysis"
+    / "g309600_representative_upstream_downstream_proteins.faa"
+)
+
+
+# ============================================================
+# 3. EXPECTED PROTEINS
+# ============================================================
+
+EXPECTED_LENGTHS = {
+
+    "EDS1_P1": 599,
+    "EDS1_P2": 610,
+    "EDS1_P17": 630,
+
+    "SAG101_P9": 575,
+    "SAG101_P12": 576,
+
+    "PAD4_A": 607,
+    "PAD4_B": 619
+}
+
+# ============================================================
+# 4. FASTA READER
+# ============================================================
+
+def read_fasta(path):
+
+    records = {}
+
+    header = None
+    seq = []
+
+
+    with open(path) as fh:
+
+        for line in fh:
+
+            line = line.strip()
+
+            if not line:
+                continue
+
+
+            if line.startswith(">"):
+
+                if header is not None:
+
+                    records[header] = "".join(
+                        seq
+                    )
+
+
+                header = line[1:]
+
+                seq = []
+
+
+            else:
+
+                seq.append(
+                    line
+                )
+
+
+        if header is not None:
+
+            records[header] = "".join(
+                seq
+            )
+
+
+    return records
+
+
+# ============================================================
+# 5. READ SOURCE FASTAS
+# ============================================================
+
+eds1 = read_fasta(
+    EDS1_FASTA
+)
+
+pad4 = read_fasta(
+    PAD4_FASTA
+)
+
+sag101 = read_fasta(
+    SAG101_FASTA
+)
+
+
+# ============================================================
+# 6. SELECT EXACT PROTEINS
+# ============================================================
+
+def get_unique_by_pattern(
+    records,
+    pattern
+):
+
+    matches = []
+
+
+    for header, seq in records.items():
+
+        # Headers use either:
+        #
+        #   field__field__field
+        #
+        # or:
+        #
+        #   field|field|field
+        #
+        # Split into exact header fields so that, for example,
+        # Protein_P1 does NOT accidentally match Protein_P17.
+
+        tokens = re.split(
+            r"__|\|",
+            header
+        )
+
+
+        if pattern in tokens:
+
+            matches.append(
+                (
+                    header,
+                    seq
+                )
+            )
+
+
+    if len(matches) == 0:
+
+        raise ValueError(
+            f"No FASTA record matched exact label: {pattern}"
+        )
+
+
+    unique_sequences = {}
+
+    for header, seq in matches:
+
+        unique_sequences.setdefault(
+            seq,
+            []
+        ).append(
+            header
+        )
+
+
+    if len(unique_sequences) != 1:
+
+        print()
+        print(
+            f"ERROR: {pattern} matched multiple unique sequences:"
+        )
+
+        for sequence, headers in unique_sequences.items():
+
+            print(
+                f"  sequence length = {len(sequence)} aa"
+            )
+
+            for header in headers:
+
+                print(
+                    f"    {header}"
+                )
+
+        raise ValueError(
+            f"Exact label {pattern} matched "
+            f"{len(unique_sequences)} unique sequences"
+        )
+
+
+    sequence = next(
+        iter(
+            unique_sequences
+        )
+    )
+
+
+    headers = unique_sequences[
+        sequence
+    ]
+
+
+    return sequence, headers
+
+proteins = {}
+
+
+# ------------------------------------------------------------
+# EDS1
+# ------------------------------------------------------------
+
+proteins["EDS1_P1"], _ = get_unique_by_pattern(
+    eds1,
+    "Protein_P1"
+)
+
+proteins["EDS1_P2"], _ = get_unique_by_pattern(
+    eds1,
+    "Protein_P2"
+)
+
+proteins["EDS1_P17"], _ = get_unique_by_pattern(
+    eds1,
+    "Protein_P17"
+)
+
+
+# ------------------------------------------------------------
+# PAD4
+#
+# Protein A occurs in two transcript records but should encode
+# the same protein sequence.
+# ------------------------------------------------------------
+
+proteins["PAD4_A"], pad4_a_headers = get_unique_by_pattern(
+    pad4,
+    "Protein_A"
+)
+
+proteins["PAD4_B"], pad4_b_headers = get_unique_by_pattern(
+    pad4,
+    "Protein_B"
+)
+
+
+# ------------------------------------------------------------
+# SAG101
+# ------------------------------------------------------------
+
+proteins["SAG101_P9"], _ = get_unique_by_pattern(
+    sag101,
+    "Protein_9"
+)
+
+proteins["SAG101_P12"], _ = get_unique_by_pattern(
+    sag101,
+    "Protein_12"
+)
+
+
+# ============================================================
+# 7. CLEAN / VALIDATE AMINO-ACID SEQUENCES
+# ============================================================
+
+VALID_AA = set(
+    "ACDEFGHIKLMNPQRSTVWY"
+)
+
+
+for name, sequence in proteins.items():
+
+    sequence = (
+        sequence
+        .replace("*", "")
+        .upper()
+    )
+
+    proteins[name] = sequence
+
+
+    bad = set(
+        sequence
+    ) - VALID_AA
+
+
+    if bad:
+
+        raise ValueError(
+            f"{name} contains unexpected characters: "
+            f"{sorted(bad)}"
+        )
+
+
+    observed = len(
+        sequence
+    )
+
+    expected = EXPECTED_LENGTHS[
+        name
+    ]
+
+
+    if observed != expected:
+
+        raise ValueError(
+            f"{name}: expected {expected} aa, "
+            f"observed {observed} aa"
+        )
+
+
+# ============================================================
+# 8. WRITE CLEAN FASTAS
+# ============================================================
+
+for name, sequence in proteins.items():
+
+    fasta = (
+        SEQDIR
+        / f"{name}.fasta"
+    )
+
+
+    with open(
+        fasta,
+        "w"
+    ) as out:
+
+        out.write(
+            f">{name}\n"
+        )
+
+
+        for i in range(
+            0,
+            len(sequence),
+            80
+        ):
+
+            out.write(
+                sequence[
+                    i:i + 80
+                ]
+                + "\n"
+            )
+
+
+# ============================================================
+# 9. COMPLEX DEFINITIONS
+# ============================================================
+
+jobs = []
+
+
+# ------------------------------------------------------------
+# PRIMARY:
+# EDS1 x SAG101
+# 5 seeds
+# ------------------------------------------------------------
+
+for eds1_name in [
+
+    "EDS1_P1",
+    "EDS1_P2",
+    "EDS1_P17"
+
+]:
+
+    for sag_name in [
+
+        "SAG101_P9",
+        "SAG101_P12"
+
+    ]:
+
+        jobs.append({
+
+            "complex":
+                f"{eds1_name}__{sag_name}",
+
+            "chain_A":
+                eds1_name,
+
+            "chain_B":
+                sag_name,
+
+            "analysis":
+                "EDS1_SAG101",
+
+            "num_seeds":
+                5
+
+        })
+
+
+# ------------------------------------------------------------
+# SECONDARY:
+# EDS1 x PAD4
+# 3 seeds
+# ------------------------------------------------------------
+
+for eds1_name in [
+
+    "EDS1_P1",
+    "EDS1_P2",
+    "EDS1_P17"
+
+]:
+
+    for pad4_name in [
+
+        "PAD4_A",
+        "PAD4_B"
+
+    ]:
+
+        jobs.append({
+
+            "complex":
+                f"{eds1_name}__{pad4_name}",
+
+            "chain_A":
+                eds1_name,
+
+            "chain_B":
+                pad4_name,
+
+            "analysis":
+                "EDS1_PAD4",
+
+            "num_seeds":
+                3
+
+        })
+
+
+# ============================================================
+# 10. CREATE ALPHAFOLD 3 JSON FILES
+#
+# ============================================================
+
+STARTING_SEED = 42
+
+
+for job in jobs:
+
+    name = job[
+        "complex"
+    ]
+
+    protein_A = job[
+        "chain_A"
+    ]
+
+    protein_B = job[
+        "chain_B"
+    ]
+
+
+    af_input = {
+
+        "name":
+            name,
+
+        "modelSeeds":
+            [
+                STARTING_SEED
+            ],
+
+        "sequences": [
+
+            {
+                "protein": {
+
+                    "id":
+                        "A",
+
+                    "sequence":
+                        proteins[
+                            protein_A
+                        ]
+
+                }
+            },
+
+            {
+                "protein": {
+
+                    "id":
+                        "B",
+
+                    "sequence":
+                        proteins[
+                            protein_B
+                        ]
+
+                }
+            }
+
+        ],
+
+        "dialect":
+            "alphafold3",
+
+        "version":
+            1
+
+    }
+
+
+    json_path = (
+        JSONDIR
+        / f"{name}.json"
+    )
+
+
+    with open(
+        json_path,
+        "w"
+    ) as out:
+
+        json.dump(
+            af_input,
+            out,
+            indent=2
+        )
+
+        out.write(
+            "\n"
+        )
+
+
+# ============================================================
+# 11. WRITE JOB MANIFEST
+# ============================================================
+
+MANIFEST = (
+    AFDIR
+    / "alphafold_jobs.tsv"
+)
+
+
+with open(
+    MANIFEST,
+    "w"
+) as out:
+
+    out.write(
+
+        "Job_Index\t"
+        "Complex\t"
+        "Analysis\t"
+        "Chain_A\t"
+        "Chain_B\t"
+        "Num_Seeds\t"
+        "JSON\n"
+
+    )
+
+
+    for i, job in enumerate(
+        jobs,
+        start=1
+    ):
+
+        json_path = (
+            JSONDIR
+            / f"{job['complex']}.json"
+        )
+
+
+        out.write(
+
+            f"{i}\t"
+            f"{job['complex']}\t"
+            f"{job['analysis']}\t"
+            f"{job['chain_A']}\t"
+            f"{job['chain_B']}\t"
+            f"{job['num_seeds']}\t"
+            f"{json_path}\n"
+
+        )
+
+
+# ============================================================
+# 12. PRINT SUMMARY
+# ============================================================
+
+print()
+print(
+    "============================================================"
+)
+print(
+    "ALPHAFOLD 3 INPUT SETUP COMPLETE"
+)
+print(
+    "============================================================"
+)
+print()
+
+
+print(
+    "Protein sequences:"
+)
+
+for name in [
+
+    "EDS1_P1",
+    "EDS1_P2",
+    "EDS1_P17",
+    "SAG101_P9",
+    "SAG101_P12",
+    "PAD4_A",
+    "PAD4_B"
+
+]:
+
+    print(
+        f"{name:12s} "
+        f"{len(proteins[name]):4d} aa"
+    )
+
+
+print()
+
+print(
+    "PAD4 A source records:"
+)
+
+for header in pad4_a_headers:
+
+    print(
+        "  "
+        + header
+    )
+
+
+print()
+
+print(
+    "Jobs:"
+)
+
+
+for i, job in enumerate(
+    jobs,
+    start=1
+):
+
+    print(
+
+        f"{i:2d}  "
+        f"{job['complex']:28s}  "
+        f"{job['num_seeds']} seeds"
+
+    )
+
+
+print()
+print(
+    f"Manifest: {MANIFEST}"
+)
+print()
+
+
+
+
+
+python3 setup_AlphaFold3_EDS1_SAG101_PAD4.py
+
+
+
+
+
+
+
+
+
+# run alphafold3 using bash wrapper script
+
+#!/bin/bash -l
+#SBATCH --job-name=AF3_EDS1
+#SBATCH --output=/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/WGCNA_Vrip_X_Vrup/signed_network/candidate_architecture/AlphaFold3_EDS1_SAG101_PAD4/logs/AF3_%A_%a.out
+#SBATCH --error=/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/WGCNA_Vrip_X_Vrup/signed_network/candidate_architecture/AlphaFold3_EDS1_SAG101_PAD4/logs/AF3_%A_%a.err
+#SBATCH --time=24:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --array=2-12%2
+#SBATCH -p gpu
+#SBATCH --gres=gpu:1
+#SBATCH --exclude=gpu05
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+
+set -euo pipefail
+
+
+# ============================================================
+# 1. LOAD ALPHAFOLD
+# ============================================================
+
+module purge
+
+module load alphafold/3.0.2
+
+
+# ============================================================
+# 2. MAIN PATHS
+# ============================================================
+
+BASE="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+AFDIR="$BASE/WGCNA_Vrip_X_Vrup/signed_network/candidate_architecture/AlphaFold3_EDS1_SAG101_PAD4"
+
+MANIFEST="$AFDIR/alphafold_jobs.tsv"
+
+
+# ============================================================
+# 3. CHECK ARRAY TASK ID
+# ============================================================
+
+if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
+
+    echo "ERROR:"
+    echo "This script must be submitted as a SLURM array job."
+    echo
+    echo "Example:"
+    echo "sbatch --array=1 run_AlphaFold3_EDS1_SAG101_PAD4.sh"
+
+    exit 1
+
+fi
+
+
+# ============================================================
+# 4. READ THE CORRECT COMPLEX FROM THE MANIFEST
+#
+# Manifest columns:
+#
+# Job_Index
+# Complex
+# Analysis
+# Chain_A
+# Chain_B
+# Num_Seeds
+# JSON
+# ============================================================
+
+LINE=$(awk \
+    -F'\t' \
+    -v id="$SLURM_ARRAY_TASK_ID" \
+    'NR > 1 && $1 == id {print}' \
+    "$MANIFEST"
+)
+
+
+if [[ -z "$LINE" ]]; then
+
+    echo "ERROR:"
+    echo "No manifest row found for array task:"
+    echo "$SLURM_ARRAY_TASK_ID"
+
+    exit 1
+
+fi
+
+
+IFS=$'\t' read -r \
+JOB_INDEX \
+COMPLEX \
+ANALYSIS \
+CHAIN_A \
+CHAIN_B \
+NUM_SEEDS \
+JSON_PATH \
+<<< "$LINE"
+
+
+# ============================================================
+# 5. OUTPUT DIRECTORY
+# ============================================================
+
+OUTPUT_DIR="$AFDIR/outputs/$COMPLEX"
+
+mkdir -p "$OUTPUT_DIR"
+
+
+# ============================================================
+# 6. PRINT JOB INFORMATION
+# ============================================================
+
+echo
+echo "============================================================"
+echo "ALPHAFOLD 3 JOB"
+echo "============================================================"
+echo
+
+echo "SLURM job ID:        $SLURM_JOB_ID"
+echo "Array task ID:       $SLURM_ARRAY_TASK_ID"
+
+echo
+
+echo "Complex:             $COMPLEX"
+echo "Analysis:            $ANALYSIS"
+echo "Chain A:             $CHAIN_A"
+echo "Chain B:             $CHAIN_B"
+echo "Number of seeds:     $NUM_SEEDS"
+
+echo
+
+echo "JSON input:"
+echo "$JSON_PATH"
+
+echo
+
+echo "Output directory:"
+echo "$OUTPUT_DIR"
+
+echo
+
+echo "AlphaFold container:"
+echo "$ALPHAFOLD_SING"
+
+echo
+
+echo "AlphaFold database:"
+echo "$ALPHAFOLD_DB"
+
+echo
+
+
+# ============================================================
+# 7. CHECK INPUTS
+# ============================================================
+
+if [[ ! -f "$MANIFEST" ]]; then
+
+    echo "ERROR: manifest missing"
+    echo "$MANIFEST"
+
+    exit 1
+
+fi
+
+
+if [[ ! -f "$JSON_PATH" ]]; then
+
+    echo "ERROR: JSON missing"
+    echo "$JSON_PATH"
+
+    exit 1
+
+fi
+
+
+if [[ ! -f "$ALPHAFOLD_SING" ]]; then
+
+    echo "ERROR: AlphaFold Singularity image missing"
+    echo "$ALPHAFOLD_SING"
+
+    exit 1
+
+fi
+
+
+if [[ ! -d "$ALPHAFOLD_DB" ]]; then
+
+    echo "ERROR: AlphaFold database directory missing"
+    echo "$ALPHAFOLD_DB"
+
+    exit 1
+
+fi
+
+
+if [[ ! -d "$ALPHAFOLD_DB/model" ]]; then
+
+    echo "ERROR: AlphaFold model directory missing"
+    echo "$ALPHAFOLD_DB/model"
+
+    exit 1
+
+fi
+
+
+# ============================================================
+# 8. GPU CHECK
+# ============================================================
+
+echo
+echo "============================================================"
+echo "GPU INFORMATION"
+echo "============================================================"
+echo
+
+nvidia-smi
+
+echo
+
+
+# ============================================================
+# 9. RUN ALPHAFOLD 3
+#
+# --nv:
+#   exposes the NVIDIA GPU inside Singularity
+#
+# --json_path:
+#   one complex from our generated JSON files
+#
+# --model_dir:
+#   AlphaFold 3 model weights
+#
+# --db_dir:
+#   sequence/template databases
+#
+# --num_seeds:
+#   5 for EDS1-SAG101
+#   3 for EDS1-PAD4
+#
+# --run_data_pipeline:
+#   runs MSA/template preparation
+#
+# --run_inference:
+#   performs structure prediction
+# ============================================================
+
+echo
+echo "============================================================"
+echo "STARTING ALPHAFOLD 3"
+echo "============================================================"
+echo
+
+
+singularity exec \
+    --nv \
+    "$ALPHAFOLD_SING" \
+    python3 \
+    /app/alphafold/run_alphafold.py \
+    --json_path="$JSON_PATH" \
+    --model_dir="$ALPHAFOLD_DB/model" \
+    --db_dir="$ALPHAFOLD_DB" \
+    --output_dir="$OUTPUT_DIR" \
+    --num_seeds="$NUM_SEEDS" \
+    --run_data_pipeline \
+    --run_inference
+
+
+# ============================================================
+# 10. FINISHED
+# ============================================================
+
+echo
+echo "============================================================"
+echo "ALPHAFOLD 3 COMPLETE"
+echo "============================================================"
+echo
+
+echo "Complex:"
+echo "$COMPLEX"
+
+echo
+
+echo "Files created:"
+echo
+
+find "$OUTPUT_DIR" \
+    -maxdepth 3 \
+    -type f \
+    | sort
+
+echo
+
+
+
+# run 1 job first 
+sbatch --array=1 run_AlphaFold3_EDS1_SAG101_PAD4.sh
+
+# check queue
+squeue -u "$USER" -o "%.18i %.9P %.20j %.2t %.10M %.6D %R"
+
+
+# submit remaining jobs in the array (.sh file updated to run array 2-12)
+sbatch run_AlphaFold3_EDS1_SAG101_PAD4_job2-12.sh
+
+# Submitted batch job 29090194
+
+
+
+
+
+
+
+
+
+### Extract every model confidence value
+
+nano summarize_AlphaFold3_models.py
+
+#!/usr/bin/env python3
+
+from pathlib import Path
+import json
+import csv
+import re
+import statistics
+
+
+# ============================================================
+# 1. PATHS
+# ============================================================
+
+BASE = Path(
+    "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+)
+
+AFDIR = (
+    BASE
+    / "WGCNA_Vrip_X_Vrup"
+    / "signed_network"
+    / "candidate_architecture"
+    / "AlphaFold3_EDS1_SAG101_PAD4"
+)
+
+OUTPUTS = AFDIR / "outputs"
+ANALYSIS = AFDIR / "analysis"
+TABLES = ANALYSIS / "tables"
+STRUCTURES = ANALYSIS / "structures"
+
+TABLES.mkdir(parents=True, exist_ok=True)
+STRUCTURES.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================
+# 2. FIND INDIVIDUAL SEED/SAMPLE RESULTS
+# ============================================================
+
+pattern = re.compile(
+    r"seed-(\d+)_sample-(\d+)"
+)
+
+rows = []
+
+
+for summary_file in sorted(
+    OUTPUTS.glob(
+        "*/*/seed-*_sample-*/*_summary_confidences.json"
+    )
+):
+
+    sample_dir = summary_file.parent
+
+    match = pattern.search(sample_dir.name)
+
+    if match is None:
+        continue
+
+    seed = int(match.group(1))
+    sample = int(match.group(2))
+
+    # Complex is two levels above seed directory
+    complex_name = sample_dir.parent.name
+
+    with open(summary_file) as fh:
+        data = json.load(fh)
+
+    chain_iptm = data.get("chain_iptm", [None, None])
+    chain_ptm = data.get("chain_ptm", [None, None])
+
+    chain_pair_iptm = data.get(
+        "chain_pair_iptm",
+        [[None, None], [None, None]]
+    )
+
+    chain_pair_pae_min = data.get(
+        "chain_pair_pae_min",
+        [[None, None], [None, None]]
+    )
+
+    model_file = next(
+        sample_dir.glob("*_model.cif"),
+        None
+    )
+
+    row = {
+        "complex": complex_name,
+        "seed": seed,
+        "sample": sample,
+
+        "ranking_score": data.get(
+            "ranking_score"
+        ),
+
+        "iptm": data.get("iptm"),
+        "ptm": data.get("ptm"),
+
+        "fraction_disordered": data.get(
+            "fraction_disordered"
+        ),
+
+        "has_clash": data.get(
+            "has_clash"
+        ),
+
+        "chain_A_iptm": (
+            chain_iptm[0]
+            if len(chain_iptm) > 0
+            else None
+        ),
+
+        "chain_B_iptm": (
+            chain_iptm[1]
+            if len(chain_iptm) > 1
+            else None
+        ),
+
+        "chain_A_ptm": (
+            chain_ptm[0]
+            if len(chain_ptm) > 0
+            else None
+        ),
+
+        "chain_B_ptm": (
+            chain_ptm[1]
+            if len(chain_ptm) > 1
+            else None
+        ),
+
+        "A_to_B_pair_iptm": (
+            chain_pair_iptm[0][1]
+        ),
+
+        "B_to_A_pair_iptm": (
+            chain_pair_iptm[1][0]
+        ),
+
+        "A_to_B_pae_min": (
+            chain_pair_pae_min[0][1]
+        ),
+
+        "B_to_A_pae_min": (
+            chain_pair_pae_min[1][0]
+        ),
+
+        "summary_file": str(
+            summary_file
+        ),
+
+        "model_file": (
+            str(model_file)
+            if model_file is not None
+            else ""
+        )
+    }
+
+    rows.append(row)
+
+
+# ============================================================
+# 3. WRITE ALL MODEL RESULTS
+# ============================================================
+
+all_file = (
+    TABLES
+    / "AlphaFold3_all_seed_sample_metrics.csv"
+)
+
+fields = [
+    "complex",
+    "seed",
+    "sample",
+    "ranking_score",
+    "iptm",
+    "ptm",
+    "fraction_disordered",
+    "has_clash",
+    "chain_A_iptm",
+    "chain_B_iptm",
+    "chain_A_ptm",
+    "chain_B_ptm",
+    "A_to_B_pair_iptm",
+    "B_to_A_pair_iptm",
+    "A_to_B_pae_min",
+    "B_to_A_pae_min",
+    "summary_file",
+    "model_file"
+]
+
+with open(all_file, "w", newline="") as out:
+
+    writer = csv.DictWriter(
+        out,
+        fieldnames=fields
+    )
+
+    writer.writeheader()
+
+    for row in rows:
+        writer.writerow(row)
+
+
+# ============================================================
+# 4. SUMMARIZE EACH COMPLEX
+# ============================================================
+
+complexes = sorted(
+    set(
+        row["complex"]
+        for row in rows
+    )
+)
+
+summary_rows = []
+
+
+for complex_name in complexes:
+
+    subset = [
+        row
+        for row in rows
+        if row["complex"] == complex_name
+    ]
+
+    best = max(
+        subset,
+        key=lambda x: (
+            x["ranking_score"],
+            x["iptm"],
+            x["ptm"]
+        )
+    )
+
+    def mean_metric(name):
+
+        vals = [
+            x[name]
+            for x in subset
+            if x[name] is not None
+        ]
+
+        return (
+            statistics.mean(vals)
+            if vals
+            else None
+        )
+
+    def sd_metric(name):
+
+        vals = [
+            x[name]
+            for x in subset
+            if x[name] is not None
+        ]
+
+        return (
+            statistics.stdev(vals)
+            if len(vals) > 1
+            else 0
+        )
+
+    summary_rows.append({
+
+        "complex":
+            complex_name,
+
+        "n_models":
+            len(subset),
+
+        "best_seed":
+            best["seed"],
+
+        "best_sample":
+            best["sample"],
+
+        "best_ranking_score":
+            best["ranking_score"],
+
+        "best_iptm":
+            best["iptm"],
+
+        "best_ptm":
+            best["ptm"],
+
+        "mean_ranking_score":
+            mean_metric(
+                "ranking_score"
+            ),
+
+        "sd_ranking_score":
+            sd_metric(
+                "ranking_score"
+            ),
+
+        "mean_iptm":
+            mean_metric(
+                "iptm"
+            ),
+
+        "sd_iptm":
+            sd_metric(
+                "iptm"
+            ),
+
+        "mean_ptm":
+            mean_metric(
+                "ptm"
+            ),
+
+        "sd_ptm":
+            sd_metric(
+                "ptm"
+            ),
+
+        "mean_A_to_B_pae_min":
+            mean_metric(
+                "A_to_B_pae_min"
+            ),
+
+        "mean_B_to_A_pae_min":
+            mean_metric(
+                "B_to_A_pae_min"
+            ),
+
+        "best_model_file":
+            best["model_file"]
+    })
+
+
+summary_file = (
+    TABLES
+    / "AlphaFold3_complex_summary.csv"
+)
+
+summary_fields = list(
+    summary_rows[0].keys()
+)
+
+
+with open(
+    summary_file,
+    "w",
+    newline=""
+) as out:
+
+    writer = csv.DictWriter(
+        out,
+        fieldnames=summary_fields
+    )
+
+    writer.writeheader()
+
+    for row in summary_rows:
+        writer.writerow(row)
+
+
+# ============================================================
+# 5. PRINT SUMMARY
+# ============================================================
+
+print()
+print("=" * 72)
+print("ALPHAFOLD 3 SUMMARY")
+print("=" * 72)
+print()
+
+print(
+    f"Individual models parsed: "
+    f"{len(rows)}"
+)
+
+print(
+    f"Complexes parsed: "
+    f"{len(complexes)}"
+)
+
+print()
+
+for row in summary_rows:
+
+    print(row["complex"])
+
+    print(
+        f"  models:          "
+        f"{row['n_models']}"
+    )
+
+    print(
+        f"  best model:      "
+        f"seed {row['best_seed']}, "
+        f"sample {row['best_sample']}"
+    )
+
+    print(
+        f"  best rank score: "
+        f"{row['best_ranking_score']:.3f}"
+    )
+
+    print(
+        f"  best ipTM:       "
+        f"{row['best_iptm']:.3f}"
+    )
+
+    print(
+        f"  best pTM:        "
+        f"{row['best_ptm']:.3f}"
+    )
+
+    print(
+        f"  mean ipTM:       "
+        f"{row['mean_iptm']:.3f} "
+        f"+/- "
+        f"{row['sd_iptm']:.3f}"
+    )
+
+    print(
+        f"  best structure:"
+    )
+
+    print(
+        f"    "
+        f"{row['best_model_file']}"
+    )
+
+    print()
+
+
+print(
+    "All-model table:"
+)
+
+print(
+    all_file
+)
+
+print()
+
+print(
+    "Complex summary:"
+)
+
+print(
+    summary_file
+)
+
+print()
+
+python3 summarize_AlphaFold3_models.py
+
+
+
+
+
+
+# Next step: extract inter-chain PAE and interface contacts from all completed complexes automatically.
+
+nano analyze_AlphaFold3_interfaces.py
+
+
+#!/usr/bin/env python3
+
+from pathlib import Path
+import json
+import csv
+import statistics
+
+BASE = Path(
+    "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+)
+
+AFDIR = (
+    BASE
+    / "WGCNA_Vrip_X_Vrup"
+    / "signed_network"
+    / "candidate_architecture"
+    / "AlphaFold3_EDS1_SAG101_PAD4"
+)
+
+OUTPUTS = AFDIR / "outputs"
+TABLES = AFDIR / "analysis" / "tables"
+
+TABLES.mkdir(parents=True, exist_ok=True)
+
+rows = []
+
+for complex_dir in sorted(OUTPUTS.iterdir()):
+
+    if not complex_dir.is_dir():
+        continue
+
+    complex_name = complex_dir.name
+
+    inner = complex_dir / complex_name
+
+    conf = inner / f"{complex_name}_confidences.json"
+    summary = inner / f"{complex_name}_summary_confidences.json"
+
+    if not conf.exists() or not summary.exists():
+        continue
+
+    with open(conf) as fh:
+        x = json.load(fh)
+
+    with open(summary) as fh:
+        s = json.load(fh)
+
+    pae = x["pae"]
+    chain_ids = x["token_chain_ids"]
+    res_ids = x["token_res_ids"]
+
+    chains = sorted(set(chain_ids))
+
+    if len(chains) != 2:
+        print(
+            f"Skipping {complex_name}: "
+            f"expected 2 chains, found {chains}"
+        )
+        continue
+
+    chain_a = chains[0]
+    chain_b = chains[1]
+
+    idx_a = [
+        i for i, c in enumerate(chain_ids)
+        if c == chain_a
+    ]
+
+    idx_b = [
+        i for i, c in enumerate(chain_ids)
+        if c == chain_b
+    ]
+
+    ab = [
+        pae[i][j]
+        for i in idx_a
+        for j in idx_b
+    ]
+
+    ba = [
+        pae[i][j]
+        for i in idx_b
+        for j in idx_a
+    ]
+
+    combined = ab + ba
+
+    def frac_below(values, cutoff):
+        return sum(v < cutoff for v in values) / len(values)
+
+    rows.append({
+        "complex": complex_name,
+
+        "chain_A":
+            chain_a,
+
+        "chain_B":
+            chain_b,
+
+        "n_res_A":
+            len(idx_a),
+
+        "n_res_B":
+            len(idx_b),
+
+        "iptm":
+            s.get("iptm"),
+
+        "ptm":
+            s.get("ptm"),
+
+        "ranking_score":
+            s.get("ranking_score"),
+
+        "mean_interchain_PAE":
+            statistics.mean(combined),
+
+        "median_interchain_PAE":
+            statistics.median(combined),
+
+        "min_interchain_PAE":
+            min(combined),
+
+        "fraction_interchain_PAE_lt5":
+            frac_below(combined, 5),
+
+        "fraction_interchain_PAE_lt10":
+            frac_below(combined, 10),
+
+        "fraction_interchain_PAE_lt15":
+            frac_below(combined, 15)
+    })
+
+
+outfile = TABLES / "AlphaFold3_interface_PAE_summary.csv"
+
+fields = list(rows[0].keys())
+
+with open(outfile, "w", newline="") as out:
+
+    writer = csv.DictWriter(
+        out,
+        fieldnames=fields
+    )
+
+    writer.writeheader()
+    writer.writerows(rows)
+
+
+print()
+print("=" * 72)
+print("ALPHAFOLD 3 INTERFACE PAE SUMMARY")
+print("=" * 72)
+print()
+
+for row in rows:
+
+    print(row["complex"])
+
+    print(
+        f"  ipTM:                    "
+        f"{row['iptm']:.3f}"
+    )
+
+    print(
+        f"  mean interchain PAE:     "
+        f"{row['mean_interchain_PAE']:.2f} Å"
+    )
+
+    print(
+        f"  median interchain PAE:   "
+        f"{row['median_interchain_PAE']:.2f} Å"
+    )
+
+    print(
+        f"  minimum interchain PAE:  "
+        f"{row['min_interchain_PAE']:.2f} Å"
+    )
+
+    print(
+        f"  fraction PAE < 5 Å:      "
+        f"{row['fraction_interchain_PAE_lt5']:.3f}"
+    )
+
+    print(
+        f"  fraction PAE < 10 Å:     "
+        f"{row['fraction_interchain_PAE_lt10']:.3f}"
+    )
+
+    print()
+
+print("Output:")
+print(outfile)
+print()
+
+
+
+python3 analyze_AlphaFold3_interfaces.py
+
+
+
+
+
+
+
+
+ 
+### Now  make the 2D interaction-confidence figure for SAG101 
+
+nano plot_AlphaFold3_SAG101_heatmaps.py
+
+#!/usr/bin/env python3
+
+from pathlib import Path
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+# ============================================================
+# 1. PATHS
+# ============================================================
+
+BASE = Path(
+    "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+)
+
+AFDIR = (
+    BASE
+    / "WGCNA_Vrip_X_Vrup"
+    / "signed_network"
+    / "candidate_architecture"
+    / "AlphaFold3_EDS1_SAG101_PAD4"
+)
+
+TABLE = (
+    AFDIR
+    / "analysis"
+    / "tables"
+    / "AlphaFold3_interface_PAE_summary.csv"
+)
+
+FIGDIR = (
+    AFDIR
+    / "analysis"
+    / "figures"
+)
+
+FIGDIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+# ============================================================
+# 2. READ TABLE
+# ============================================================
+
+df = pd.read_csv(TABLE)
+
+
+# ============================================================
+# 3. KEEP SAG101 COMPLEXES ONLY
+# ============================================================
+
+sag = df[
+    df["complex"].str.contains("SAG101")
+].copy()
+
+
+# ============================================================
+# 4. PARSE EDS1 AND SAG101 ISOFORM LABELS
+# ============================================================
+
+def parse_complex(x):
+
+    left, right = x.split("__")
+
+    eds1 = left.replace(
+        "EDS1_",
+        ""
+    )
+
+    sag101 = right.replace(
+        "SAG101_",
+        ""
+    )
+
+    return pd.Series(
+        [eds1, sag101]
+    )
+
+
+sag[
+    ["EDS1", "SAG101"]
+] = sag["complex"].apply(
+    parse_complex
+)
+
+
+# ============================================================
+# 5. DESIRED ORDER
+# ============================================================
+
+eds1_order = [
+    "P1",
+    "P2",
+    "P17"
+]
+
+sag_order = [
+    "P9",
+    "P12"
+]
+
+
+# ============================================================
+# 6. SIMPLE HEATMAP FUNCTION
+# ============================================================
+
+def plot_heatmap(
+    matrix,
+    title,
+    cbar_label,
+    outfile,
+    decimals=2
+):
+
+    data = matrix.values.astype(float)
+
+    fig, ax = plt.subplots(
+        figsize=(5.2, 4.7)
+    )
+
+    im = ax.imshow(
+        data,
+        aspect="auto"
+    )
+
+    cbar = fig.colorbar(
+        im,
+        ax=ax
+    )
+
+    cbar.set_label(
+        cbar_label
+    )
+
+    ax.set_xticks(
+        np.arange(
+            len(matrix.columns)
+        )
+    )
+
+    ax.set_xticklabels(
+        matrix.columns
+    )
+
+    ax.set_yticks(
+        np.arange(
+            len(matrix.index)
+        )
+    )
+
+    ax.set_yticklabels(
+        matrix.index
+    )
+
+    ax.set_xlabel(
+        "SAG101 protein isoform"
+    )
+
+    ax.set_ylabel(
+        "EDS1 protein isoform"
+    )
+
+    ax.set_title(
+        title
+    )
+
+    # Put numerical value in every cell
+    for i in range(
+        len(matrix.index)
+    ):
+
+        for j in range(
+            len(matrix.columns)
+        ):
+
+            value = data[i, j]
+
+            if np.isnan(value):
+                text = "NA"
+            else:
+                text = (
+                    f"{value:.{decimals}f}"
+                )
+
+            ax.text(
+                j,
+                i,
+                text,
+                ha="center",
+                va="center"
+            )
+
+    fig.tight_layout()
+
+    fig.savefig(
+        outfile.with_suffix(".png"),
+        dpi=600,
+        bbox_inches="tight"
+    )
+
+    fig.savefig(
+        outfile.with_suffix(".pdf"),
+        bbox_inches="tight"
+    )
+
+    plt.close(fig)
+
+
+# ============================================================
+# 7. ipTM HEATMAP
+# ============================================================
+
+iptm = sag.pivot(
+    index="EDS1",
+    columns="SAG101",
+    values="iptm"
+)
+
+iptm = iptm.reindex(
+    index=eds1_order,
+    columns=sag_order
+)
+
+
+plot_heatmap(
+    matrix=iptm,
+    title="EDS1–SAG101 predicted interface confidence",
+    cbar_label="ipTM",
+    outfile=FIGDIR / "SAG101_ipTM_heatmap",
+    decimals=2
+)
+
+
+# ============================================================
+# 8. MEAN INTER-CHAIN PAE HEATMAP
+# ============================================================
+
+mean_pae = sag.pivot(
+    index="EDS1",
+    columns="SAG101",
+    values="mean_interchain_PAE"
+)
+
+mean_pae = mean_pae.reindex(
+    index=eds1_order,
+    columns=sag_order
+)
+
+
+plot_heatmap(
+    matrix=mean_pae,
+    title="EDS1–SAG101 inter-chain PAE",
+    cbar_label="Mean inter-chain PAE (Å)",
+    outfile=FIGDIR / "SAG101_mean_interchain_PAE_heatmap",
+    decimals=2
+)
+
+
+# ============================================================
+# 9. FRACTION OF INTER-CHAIN PAE < 10 A
+# ============================================================
+
+pae10 = sag.pivot(
+    index="EDS1",
+    columns="SAG101",
+    values="fraction_interchain_PAE_lt10"
+)
+
+pae10 = pae10.reindex(
+    index=eds1_order,
+    columns=sag_order
+)
+
+
+plot_heatmap(
+    matrix=pae10,
+    title="EDS1–SAG101 low-PAE inter-chain fraction",
+    cbar_label="Fraction of residue pairs with PAE <10 Å",
+    outfile=FIGDIR / "SAG101_fraction_interchain_PAE_lt10_heatmap",
+    decimals=3
+)
+
+
+# ============================================================
+# 10. P9 -> P12 CHANGE TABLE
+# ============================================================
+
+comparison = []
+
+for eds1 in eds1_order:
+
+    x = sag[
+        sag["EDS1"] == eds1
+    ].set_index(
+        "SAG101"
+    )
+
+    if (
+        "P9" not in x.index
+        or "P12" not in x.index
+    ):
+        continue
+
+    comparison.append({
+
+        "EDS1":
+            eds1,
+
+        "P9_ipTM":
+            x.loc[
+                "P9",
+                "iptm"
+            ],
+
+        "P12_ipTM":
+            x.loc[
+                "P12",
+                "iptm"
+            ],
+
+        "Delta_ipTM_P12_minus_P9":
+            (
+                x.loc[
+                    "P12",
+                    "iptm"
+                ]
+                -
+                x.loc[
+                    "P9",
+                    "iptm"
+                ]
+            ),
+
+        "P9_mean_PAE":
+            x.loc[
+                "P9",
+                "mean_interchain_PAE"
+            ],
+
+        "P12_mean_PAE":
+            x.loc[
+                "P12",
+                "mean_interchain_PAE"
+            ],
+
+        "Delta_mean_PAE_P12_minus_P9":
+            (
+                x.loc[
+                    "P12",
+                    "mean_interchain_PAE"
+                ]
+                -
+                x.loc[
+                    "P9",
+                    "mean_interchain_PAE"
+                ]
+            ),
+
+        "P9_fraction_PAE_lt5":
+            x.loc[
+                "P9",
+                "fraction_interchain_PAE_lt5"
+            ],
+
+        "P12_fraction_PAE_lt5":
+            x.loc[
+                "P12",
+                "fraction_interchain_PAE_lt5"
+            ],
+
+        "Delta_fraction_PAE_lt5":
+            (
+                x.loc[
+                    "P12",
+                    "fraction_interchain_PAE_lt5"
+                ]
+                -
+                x.loc[
+                    "P9",
+                    "fraction_interchain_PAE_lt5"
+                ]
+            ),
+
+        "P9_fraction_PAE_lt10":
+            x.loc[
+                "P9",
+                "fraction_interchain_PAE_lt10"
+            ],
+
+        "P12_fraction_PAE_lt10":
+            x.loc[
+                "P12",
+                "fraction_interchain_PAE_lt10"
+            ],
+
+        "Delta_fraction_PAE_lt10":
+            (
+                x.loc[
+                    "P12",
+                    "fraction_interchain_PAE_lt10"
+                ]
+                -
+                x.loc[
+                    "P9",
+                    "fraction_interchain_PAE_lt10"
+                ]
+            )
+    })
+
+
+comparison = pd.DataFrame(
+    comparison
+)
+
+
+OUT_TABLE = (
+    AFDIR
+    / "analysis"
+    / "tables"
+    / "SAG101_P9_vs_P12_interface_comparison.csv"
+)
+
+
+comparison.to_csv(
+    OUT_TABLE,
+    index=False
+)
+
+
+# ============================================================
+# 11. PRINT RESULTS
+# ============================================================
+
+print()
+print("=" * 72)
+print("SAG101 P9 vs P12 INTERFACE COMPARISON")
+print("=" * 72)
+print()
+
+print(
+    comparison.to_string(
+        index=False
+    )
+)
+
+print()
+
+print("Figures:")
+
+for x in [
+    "SAG101_ipTM_heatmap",
+    "SAG101_mean_interchain_PAE_heatmap",
+    "SAG101_fraction_interchain_PAE_lt10_heatmap"
+]:
+
+    print(
+        FIGDIR / f"{x}.png"
+    )
+
+    print(
+        FIGDIR / f"{x}.pdf"
+    )
+
+print()
+
+print(
+    "Comparison table:"
+)
+
+print(
+    OUT_TABLE
+)
+
+print()
+
+
+python3 plot_AlphaFold3_SAG101_heatmaps.py
+
+
+
+
+
+
+
+
+### make the PAE plots
+
+nano plot_AlphaFold3_full_PAE_matrices.py
+
+
+#!/usr/bin/env python3
+
+from pathlib import Path
+import json
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+# ============================================================
+# PATHS
+# ============================================================
+
+BASE = Path(
+    "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+)
+
+AFDIR = (
+    BASE
+    / "WGCNA_Vrip_X_Vrup"
+    / "signed_network"
+    / "candidate_architecture"
+    / "AlphaFold3_EDS1_SAG101_PAD4"
+)
+
+OUTPUTS = AFDIR / "outputs"
+
+FIGDIR = (
+    AFDIR
+    / "analysis"
+    / "figures"
+    / "PAE_matrices"
+)
+
+FIGDIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+# ============================================================
+# COMPLEXES
+# ============================================================
+
+complexes = [
+    "EDS1_P1__SAG101_P9",
+    "EDS1_P1__SAG101_P12",
+
+    "EDS1_P2__SAG101_P9",
+    "EDS1_P2__SAG101_P12",
+
+    "EDS1_P17__SAG101_P9",
+    "EDS1_P17__SAG101_P12"
+]
+
+
+# ============================================================
+# PLOT EACH COMPLEX
+# ============================================================
+
+for complex_name in complexes:
+
+    result_dir = (
+        OUTPUTS
+        / complex_name
+        / complex_name
+    )
+
+    confidence_file = (
+        result_dir
+        / f"{complex_name}_confidences.json"
+    )
+
+    if not confidence_file.exists():
+
+        print(
+            "Missing:",
+            confidence_file
+        )
+
+        continue
+
+
+    # --------------------------------------------------------
+    # Read AlphaFold confidence information
+    # --------------------------------------------------------
+
+    with open(confidence_file) as fh:
+        data = json.load(fh)
+
+
+    pae = np.asarray(
+        data["pae"],
+        dtype=float
+    )
+
+    chain_ids = np.asarray(
+        data["token_chain_ids"]
+    )
+
+    res_ids = np.asarray(
+        data["token_res_ids"]
+    )
+
+
+    # --------------------------------------------------------
+    # Identify chains in order of appearance
+    # --------------------------------------------------------
+
+    chains = []
+
+    for c in chain_ids:
+
+        if c not in chains:
+            chains.append(c)
+
+
+    if len(chains) != 2:
+
+        print(
+            f"Skipping {complex_name}: "
+            f"expected 2 chains, found {chains}"
+        )
+
+        continue
+
+
+    chain_a = chains[0]
+    chain_b = chains[1]
+
+    idx_a = np.where(
+        chain_ids == chain_a
+    )[0]
+
+    idx_b = np.where(
+        chain_ids == chain_b
+    )[0]
+
+
+    n_a = len(idx_a)
+    n_b = len(idx_b)
+
+    total = n_a + n_b
+
+    boundary = n_a
+
+
+    # --------------------------------------------------------
+    # Names
+    # --------------------------------------------------------
+
+    eds1_name, sag_name = (
+        complex_name.split("__")
+    )
+
+    eds1_label = eds1_name.replace(
+        "EDS1_",
+        "EDS1-"
+    )
+
+    sag_label = sag_name.replace(
+        "SAG101_",
+        "SAG101-"
+    )
+
+
+    # --------------------------------------------------------
+    # Plot
+    #
+    # PAE convention:
+    # low PAE = darker
+    # high PAE = lighter
+    # --------------------------------------------------------
+
+    fig, ax = plt.subplots(
+        figsize=(7.2, 6.8)
+    )
+
+
+    image = ax.imshow(
+        pae,
+        origin="upper",
+        cmap="Greens_r",
+        vmin=0,
+        vmax=30,
+        interpolation="nearest"
+    )
+
+
+    # --------------------------------------------------------
+    # Chain boundaries
+    # --------------------------------------------------------
+
+    ax.axvline(
+        boundary - 0.5,
+        linewidth=1.5,
+        color="black"
+    )
+
+    ax.axhline(
+        boundary - 0.5,
+        linewidth=1.5,
+        color="black"
+    )
+
+
+    # --------------------------------------------------------
+    # Tick positions
+    # --------------------------------------------------------
+
+    ticks = [
+        0,
+        boundary - 1,
+        total - 1
+    ]
+
+    labels = [
+        "1",
+        f"{boundary:,}",
+        f"{total:,}"
+    ]
+
+    ax.set_xticks(ticks)
+    ax.set_xticklabels(labels)
+
+    ax.set_yticks(ticks)
+    ax.set_yticklabels(labels)
+
+
+    # --------------------------------------------------------
+    # Axis labels
+    # --------------------------------------------------------
+
+    ax.set_xlabel(
+        "Scored residue",
+        fontsize=13
+    )
+
+    ax.set_ylabel(
+        "Aligned residue",
+        fontsize=13
+    )
+
+
+    # --------------------------------------------------------
+    # Chain annotations above matrix
+    # --------------------------------------------------------
+
+    center_a = (
+        n_a / 2
+    )
+
+    center_b = (
+        n_a + n_b / 2
+    )
+
+
+    ax.text(
+        center_a,
+        -35,
+        eds1_label,
+        ha="center",
+        va="center",
+        fontsize=13,
+        clip_on=False
+    )
+
+    ax.text(
+        center_b,
+        -35,
+        sag_label,
+        ha="center",
+        va="center",
+        fontsize=13,
+        clip_on=False
+    )
+
+
+    # --------------------------------------------------------
+    # Side labels
+    # --------------------------------------------------------
+
+    ax.text(
+        total + 20,
+        center_a,
+        eds1_label,
+        rotation=-90,
+        ha="center",
+        va="center",
+        fontsize=12,
+        clip_on=False
+    )
+
+    ax.text(
+        total + 20,
+        center_b,
+        sag_label,
+        rotation=-90,
+        ha="center",
+        va="center",
+        fontsize=12,
+        clip_on=False
+    )
+
+
+    # --------------------------------------------------------
+    # Title
+    # --------------------------------------------------------
+
+    ax.set_title(
+        f"{eds1_label} × {sag_label}",
+        fontsize=14,
+        pad=28
+    )
+
+
+    # --------------------------------------------------------
+    # Color bar
+    # --------------------------------------------------------
+
+    cbar = fig.colorbar(
+        image,
+        ax=ax,
+        fraction=0.046,
+        pad=0.08
+    )
+
+    cbar.set_label(
+        "Predicted aligned error (Å)",
+        fontsize=11
+    )
+
+
+    # --------------------------------------------------------
+    # Save
+    # --------------------------------------------------------
+
+    fig.tight_layout()
+
+    png = (
+        FIGDIR
+        / f"{complex_name}_PAE.png"
+    )
+
+    pdf = (
+        FIGDIR
+        / f"{complex_name}_PAE.pdf"
+    )
+
+    fig.savefig(
+        png,
+        dpi=600,
+        bbox_inches="tight"
+    )
+
+    fig.savefig(
+        pdf,
+        bbox_inches="tight"
+    )
+
+    plt.close(fig)
+
+
+    print()
+    print(complex_name)
+    print(
+        f"  EDS1 residues:   {n_a}"
+    )
+    print(
+        f"  SAG101 residues: {n_b}"
+    )
+    print(
+        f"  Total residues:  {total}"
+    )
+    print(
+        f"  Written:         {png}"
+    )
+
+
+print()
+print("PAE plotting complete.")
+print()
+
+python3 plot_AlphaFold3_full_PAE_matrices.py
+
+
+
+
+
+
+### Remake the plots using the names that match the SAG101 proteins from the isoform anaylsis
+
+
+nano plot_AlphaFold3_SAG101_heatmaps.py
+
+
+
+#!/usr/bin/env python3
+
+from pathlib import Path
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+# ============================================================
+# 1. PATHS
+# ============================================================
+
+BASE = Path(
+    "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+)
+
+AFDIR = (
+    BASE
+    / "WGCNA_Vrip_X_Vrup"
+    / "signed_network"
+    / "candidate_architecture"
+    / "AlphaFold3_EDS1_SAG101_PAD4"
+)
+
+TABLE = (
+    AFDIR
+    / "analysis"
+    / "tables"
+    / "AlphaFold3_interface_PAE_summary.csv"
+)
+
+FIGDIR = (
+    AFDIR
+    / "analysis"
+    / "figures"
+)
+
+FIGDIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+# ============================================================
+# 2. IMPORTANT SAG101 NAME CROSSWALK
+#
+# AlphaFold jobs were originally named using older internal
+# protein-group labels:
+#
+#   SAG101_P9  = PB.18476.92 = final Protein P3
+#   SAG101_P12 = PB.18476.6  = final Protein P16
+#
+# The plots below use the FINAL protein names from the
+# functional Iso-Seq figure.
+# ============================================================
+
+SAG101_NAME_MAP = {
+
+    "P9": {
+        "protein": "P3",
+        "transcript": "PB.18476.92"
+    },
+
+    "P12": {
+        "protein": "P16",
+        "transcript": "PB.18476.6"
+    }
+}
+
+
+# ============================================================
+# 3. READ TABLE
+# ============================================================
+
+df = pd.read_csv(TABLE)
+
+
+# ============================================================
+# 4. KEEP SAG101 COMPLEXES ONLY
+# ============================================================
+
+sag = df[
+    df["complex"].str.contains(
+        "SAG101",
+        na=False
+    )
+].copy()
+
+
+# ============================================================
+# 5. PARSE COMPLEX NAMES
+#
+# Input names still look like:
+#
+# EDS1_P1__SAG101_P9
+# EDS1_P1__SAG101_P12
+#
+# These are converted to final P3/P16 nomenclature.
+# ============================================================
+
+def parse_complex(x):
+
+    left, right = x.split("__")
+
+    eds1 = left.replace(
+        "EDS1_",
+        ""
+    )
+
+    sag_old = right.replace(
+        "SAG101_",
+        ""
+    )
+
+    if sag_old not in SAG101_NAME_MAP:
+
+        raise ValueError(
+            f"Unknown SAG101 AlphaFold label: {sag_old}"
+        )
+
+    sag_final = (
+        SAG101_NAME_MAP[
+            sag_old
+        ]["protein"]
+    )
+
+    transcript = (
+        SAG101_NAME_MAP[
+            sag_old
+        ]["transcript"]
+    )
+
+    return pd.Series(
+        [
+            eds1,
+            sag_old,
+            sag_final,
+            transcript
+        ]
+    )
+
+
+sag[
+    [
+        "EDS1",
+        "SAG101_old_AF_label",
+        "SAG101",
+        "SAG101_transcript"
+    ]
+] = sag[
+    "complex"
+].apply(
+    parse_complex
+)
+
+
+# ============================================================
+# 6. DISPLAY ORDER
+#
+# P3 first, P16 second, matching the biological comparison.
+# ============================================================
+
+eds1_order = [
+    "P1",
+    "P2",
+    "P17"
+]
+
+sag_order = [
+    "P3",
+    "P16"
+]
+
+
+# ============================================================
+# 7. PRETTY X-AXIS LABELS
+# ============================================================
+
+sag_display_labels = {
+
+    "P3":
+        "P3\nPB.18476.92",
+
+    "P16":
+        "P16\nPB.18476.6"
+}
+
+
+# ============================================================
+# 8. HEATMAP FUNCTION
+# ============================================================
+
+def plot_heatmap(
+    matrix,
+    title,
+    cbar_label,
+    outfile,
+    decimals=2
+):
+
+    data = matrix.values.astype(
+        float
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(5.4, 4.9)
+    )
+
+    im = ax.imshow(
+        data,
+        aspect="auto"
+    )
+
+    cbar = fig.colorbar(
+        im,
+        ax=ax
+    )
+
+    cbar.set_label(
+        cbar_label
+    )
+
+    ax.set_xticks(
+        np.arange(
+            len(matrix.columns)
+        )
+    )
+
+    ax.set_xticklabels(
+        [
+            sag_display_labels[x]
+            for x in matrix.columns
+        ]
+    )
+
+    ax.set_yticks(
+        np.arange(
+            len(matrix.index)
+        )
+    )
+
+    ax.set_yticklabels(
+        matrix.index
+    )
+
+    ax.set_xlabel(
+        "SAG101 protein"
+    )
+
+    ax.set_ylabel(
+        "EDS1 protein isoform"
+    )
+
+    ax.set_title(
+        title
+    )
+
+
+    # --------------------------------------------------------
+    # Numerical labels inside cells
+    # --------------------------------------------------------
+
+    for i in range(
+        len(matrix.index)
+    ):
+
+        for j in range(
+            len(matrix.columns)
+        ):
+
+            value = data[i, j]
+
+            if np.isnan(value):
+
+                text = "NA"
+
+            else:
+
+                text = (
+                    f"{value:.{decimals}f}"
+                )
+
+            ax.text(
+                j,
+                i,
+                text,
+                ha="center",
+                va="center"
+            )
+
+
+    fig.tight_layout()
+
+    fig.savefig(
+        outfile.with_suffix(".png"),
+        dpi=600,
+        bbox_inches="tight"
+    )
+
+    fig.savefig(
+        outfile.with_suffix(".pdf"),
+        bbox_inches="tight"
+    )
+
+    plt.close(fig)
+
+
+# ============================================================
+# 9. ipTM HEATMAP
+# ============================================================
+
+iptm = sag.pivot(
+    index="EDS1",
+    columns="SAG101",
+    values="iptm"
+)
+
+iptm = iptm.reindex(
+    index=eds1_order,
+    columns=sag_order
+)
+
+
+plot_heatmap(
+    matrix=iptm,
+    title=(
+        "EDS1–SAG101 predicted "
+        "interface confidence"
+    ),
+    cbar_label="ipTM",
+    outfile=(
+        FIGDIR
+        / "SAG101_P3_P16_ipTM_heatmap"
+    ),
+    decimals=2
+)
+
+
+# ============================================================
+# 10. MEAN INTER-CHAIN PAE HEATMAP
+# ============================================================
+
+mean_pae = sag.pivot(
+    index="EDS1",
+    columns="SAG101",
+    values="mean_interchain_PAE"
+)
+
+mean_pae = mean_pae.reindex(
+    index=eds1_order,
+    columns=sag_order
+)
+
+
+plot_heatmap(
+    matrix=mean_pae,
+    title=(
+        "EDS1–SAG101 inter-chain PAE"
+    ),
+    cbar_label=(
+        "Mean inter-chain PAE (Å)"
+    ),
+    outfile=(
+        FIGDIR
+        / "SAG101_P3_P16_mean_interchain_PAE_heatmap"
+    ),
+    decimals=2
+)
+
+
+# ============================================================
+# 11. FRACTION INTER-CHAIN PAE < 10 A
+# ============================================================
+
+pae10 = sag.pivot(
+    index="EDS1",
+    columns="SAG101",
+    values="fraction_interchain_PAE_lt10"
+)
+
+pae10 = pae10.reindex(
+    index=eds1_order,
+    columns=sag_order
+)
+
+
+plot_heatmap(
+    matrix=pae10,
+    title=(
+        "EDS1–SAG101 low-PAE "
+        "inter-chain fraction"
+    ),
+    cbar_label=(
+        "Fraction of residue pairs "
+        "with PAE <10 Å"
+    ),
+    outfile=(
+        FIGDIR
+        / "SAG101_P3_P16_fraction_interchain_PAE_lt10_heatmap"
+    ),
+    decimals=3
+)
+
+
+# ============================================================
+# 12. P3 vs P16 COMPARISON TABLE
+#
+# P16 minus P3:
+#   positive Delta_ipTM means P16 higher
+#   negative Delta_mean_PAE means P16 lower PAE
+# ============================================================
+
+comparison = []
+
+
+for eds1 in eds1_order:
+
+    x = sag[
+        sag["EDS1"] == eds1
+    ].set_index(
+        "SAG101"
+    )
+
+    if (
+        "P3" not in x.index
+        or
+        "P16" not in x.index
+    ):
+        continue
+
+
+    comparison.append({
+
+        "EDS1":
+            eds1,
+
+        "P3_transcript":
+            "PB.18476.92",
+
+        "P16_transcript":
+            "PB.18476.6",
+
+        "P3_ipTM":
+            x.loc[
+                "P3",
+                "iptm"
+            ],
+
+        "P16_ipTM":
+            x.loc[
+                "P16",
+                "iptm"
+            ],
+
+        "Delta_ipTM_P16_minus_P3":
+            (
+                x.loc[
+                    "P16",
+                    "iptm"
+                ]
+                -
+                x.loc[
+                    "P3",
+                    "iptm"
+                ]
+            ),
+
+        "P3_mean_PAE":
+            x.loc[
+                "P3",
+                "mean_interchain_PAE"
+            ],
+
+        "P16_mean_PAE":
+            x.loc[
+                "P16",
+                "mean_interchain_PAE"
+            ],
+
+        "Delta_mean_PAE_P16_minus_P3":
+            (
+                x.loc[
+                    "P16",
+                    "mean_interchain_PAE"
+                ]
+                -
+                x.loc[
+                    "P3",
+                    "mean_interchain_PAE"
+                ]
+            ),
+
+        "P3_fraction_PAE_lt5":
+            x.loc[
+                "P3",
+                "fraction_interchain_PAE_lt5"
+            ],
+
+        "P16_fraction_PAE_lt5":
+            x.loc[
+                "P16",
+                "fraction_interchain_PAE_lt5"
+            ],
+
+        "Delta_fraction_PAE_lt5_P16_minus_P3":
+            (
+                x.loc[
+                    "P16",
+                    "fraction_interchain_PAE_lt5"
+                ]
+                -
+                x.loc[
+                    "P3",
+                    "fraction_interchain_PAE_lt5"
+                ]
+            ),
+
+        "P3_fraction_PAE_lt10":
+            x.loc[
+                "P3",
+                "fraction_interchain_PAE_lt10"
+            ],
+
+        "P16_fraction_PAE_lt10":
+            x.loc[
+                "P16",
+                "fraction_interchain_PAE_lt10"
+            ],
+
+        "Delta_fraction_PAE_lt10_P16_minus_P3":
+            (
+                x.loc[
+                    "P16",
+                    "fraction_interchain_PAE_lt10"
+                ]
+                -
+                x.loc[
+                    "P3",
+                    "fraction_interchain_PAE_lt10"
+                ]
+            )
+    })
+
+
+comparison = pd.DataFrame(
+    comparison
+)
+
+
+OUT_TABLE = (
+    AFDIR
+    / "analysis"
+    / "tables"
+    / "SAG101_P3_vs_P16_interface_comparison.csv"
+)
+
+
+comparison.to_csv(
+    OUT_TABLE,
+    index=False
+)
+
+
+# ============================================================
+# 13. PRINT CROSSWALK + RESULTS
+# ============================================================
+
+print()
+print("=" * 78)
+print("SAG101 ALPHAFOLD NAME CROSSWALK")
+print("=" * 78)
+print()
+
+print(
+    "OLD SAG101_P9  -> "
+    "Protein P3  -> PB.18476.92"
+)
+
+print(
+    "OLD SAG101_P12 -> "
+    "Protein P16 -> PB.18476.6"
+)
+
+print()
+
+print("=" * 78)
+print("SAG101 P3 vs P16 INTERFACE COMPARISON")
+print("=" * 78)
+print()
+
+print(
+    comparison.to_string(
+        index=False
+    )
+)
+
+print()
+print("Figures:")
+print()
+
+for x in [
+    "SAG101_P3_P16_ipTM_heatmap",
+    "SAG101_P3_P16_mean_interchain_PAE_heatmap",
+    "SAG101_P3_P16_fraction_interchain_PAE_lt10_heatmap"
+]:
+
+    print(
+        FIGDIR / f"{x}.png"
+    )
+
+    print(
+        FIGDIR / f"{x}.pdf"
+    )
+
+print()
+
+print(
+    "Comparison table:"
+)
+
+print(
+    OUT_TABLE
+)
+
+print()
+
+python3 plot_AlphaFold3_SAG101_heatmaps.py
+
+
+
+
+
+
+### second plots 
+
+#!/usr/bin/env python3
+
+from pathlib import Path
+import json
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+# ============================================================
+# 1. PATHS
+# ============================================================
+
+BASE = Path(
+    "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+)
+
+AFDIR = (
+    BASE
+    / "WGCNA_Vrip_X_Vrup"
+    / "signed_network"
+    / "candidate_architecture"
+    / "AlphaFold3_EDS1_SAG101_PAD4"
+)
+
+OUTPUTS = AFDIR / "outputs"
+
+FIGDIR = (
+    AFDIR
+    / "analysis"
+    / "figures"
+    / "PAE_matrices_corrected_names"
+)
+
+FIGDIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+# ============================================================
+# 2. IMPORTANT NAME CROSSWALK
+#
+# OLD ALPHAFOLD DIRECTORY NAME
+#       -> FINAL ISO-SEQ PROTEIN NAME
+#
+# SAG101_P9
+#       = PB.18476.92
+#       = final Protein P3
+#
+# SAG101_P12
+#       = PB.18476.6
+#       = final Protein P16
+# ============================================================
+
+SAG101_NAME_MAP = {
+
+    "SAG101_P9": {
+        "protein": "P3",
+        "transcript": "PB.18476.92"
+    },
+
+    "SAG101_P12": {
+        "protein": "P16",
+        "transcript": "PB.18476.6"
+    }
+}
+
+
+# ============================================================
+# 3. COMPLEXES
+#
+# These remain OLD AlphaFold job/directory names because
+# those are the actual paths on disk.
+# ============================================================
+
+complexes = [
+
+    "EDS1_P1__SAG101_P9",
+    "EDS1_P1__SAG101_P12",
+
+    "EDS1_P2__SAG101_P9",
+    "EDS1_P2__SAG101_P12",
+
+    "EDS1_P17__SAG101_P9",
+    "EDS1_P17__SAG101_P12"
+]
+
+
+# ============================================================
+# 4. PLOT EACH COMPLEX
+# ============================================================
+
+for complex_name in complexes:
+
+
+    # --------------------------------------------------------
+    # Existing AlphaFold path
+    # --------------------------------------------------------
+
+    result_dir = (
+        OUTPUTS
+        / complex_name
+        / complex_name
+    )
+
+    confidence_file = (
+        result_dir
+        / f"{complex_name}_confidences.json"
+    )
+
+
+    if not confidence_file.exists():
+
+        print(
+            "Missing:",
+            confidence_file
+        )
+
+        continue
+
+
+    # --------------------------------------------------------
+    # Parse old job names
+    # --------------------------------------------------------
+
+    eds1_old, sag_old = (
+        complex_name.split("__")
+    )
+
+    eds1_protein = (
+        eds1_old.replace(
+            "EDS1_",
+            ""
+        )
+    )
+
+
+    if sag_old not in SAG101_NAME_MAP:
+
+        raise ValueError(
+            "Unknown SAG101 name: "
+            + sag_old
+        )
+
+
+    sag_protein = (
+        SAG101_NAME_MAP[
+            sag_old
+        ]["protein"]
+    )
+
+    sag_transcript = (
+        SAG101_NAME_MAP[
+            sag_old
+        ]["transcript"]
+    )
+
+
+    # --------------------------------------------------------
+    # Correct display labels
+    # --------------------------------------------------------
+
+    eds1_label = (
+        f"EDS1-{eds1_protein}"
+    )
+
+    sag_label = (
+        f"SAG101-{sag_protein}"
+    )
+
+    sag_full_label = (
+        f"SAG101-{sag_protein}\n"
+        f"{sag_transcript}"
+    )
+
+
+    # --------------------------------------------------------
+    # Read AlphaFold confidence data
+    # --------------------------------------------------------
+
+    with open(
+        confidence_file
+    ) as fh:
+
+        data = json.load(fh)
+
+
+    pae = np.asarray(
+        data["pae"],
+        dtype=float
+    )
+
+    chain_ids = np.asarray(
+        data["token_chain_ids"]
+    )
+
+
+    # --------------------------------------------------------
+    # Identify chains in appearance order
+    # --------------------------------------------------------
+
+    chains = []
+
+    for c in chain_ids:
+
+        if c not in chains:
+            chains.append(c)
+
+
+    if len(chains) != 2:
+
+        print(
+            f"Skipping {complex_name}: "
+            f"expected 2 chains, "
+            f"found {chains}"
+        )
+
+        continue
+
+
+    chain_a = chains[0]
+    chain_b = chains[1]
+
+
+    idx_a = np.where(
+        chain_ids == chain_a
+    )[0]
+
+    idx_b = np.where(
+        chain_ids == chain_b
+    )[0]
+
+
+    n_a = len(idx_a)
+    n_b = len(idx_b)
+
+    total = n_a + n_b
+
+    boundary = n_a
+
+
+    # ========================================================
+    # 5. PLOT
+    # ========================================================
+
+    fig, ax = plt.subplots(
+        figsize=(7.4, 6.9)
+    )
+
+
+    image = ax.imshow(
+        pae,
+        origin="upper",
+        cmap="Greens_r",
+        vmin=0,
+        vmax=30,
+        interpolation="nearest"
+    )
+
+
+    # --------------------------------------------------------
+    # Chain boundaries
+    # --------------------------------------------------------
+
+    ax.axvline(
+        boundary - 0.5,
+        linewidth=1.5,
+        color="black"
+    )
+
+    ax.axhline(
+        boundary - 0.5,
+        linewidth=1.5,
+        color="black"
+    )
+
+
+    # --------------------------------------------------------
+    # Axis ticks
+    # --------------------------------------------------------
+
+    ticks = [
+        0,
+        boundary - 1,
+        total - 1
+    ]
+
+    labels = [
+        "1",
+        f"{boundary:,}",
+        f"{total:,}"
+    ]
+
+
+    ax.set_xticks(
+        ticks
+    )
+
+    ax.set_xticklabels(
+        labels
+    )
+
+    ax.set_yticks(
+        ticks
+    )
+
+    ax.set_yticklabels(
+        labels
+    )
+
+
+    # --------------------------------------------------------
+    # Axis labels
+    # --------------------------------------------------------
+
+    ax.set_xlabel(
+        "Scored residue",
+        fontsize=13
+    )
+
+    ax.set_ylabel(
+        "Aligned residue",
+        fontsize=13
+    )
+
+
+    # --------------------------------------------------------
+    # Protein centers
+    # --------------------------------------------------------
+
+    center_a = (
+        n_a / 2
+    )
+
+    center_b = (
+        n_a + n_b / 2
+    )
+
+
+    # --------------------------------------------------------
+    # Top chain labels
+    # --------------------------------------------------------
+
+    ax.text(
+        center_a,
+        -35,
+        eds1_label,
+        ha="center",
+        va="center",
+        fontsize=12,
+        clip_on=False
+    )
+
+
+    ax.text(
+        center_b,
+        -45,
+        sag_full_label,
+        ha="center",
+        va="center",
+        fontsize=11,
+        clip_on=False
+    )
+
+
+    # --------------------------------------------------------
+    # Right-side chain labels
+    # --------------------------------------------------------
+
+    ax.text(
+        total + 20,
+        center_a,
+        eds1_label,
+        rotation=-90,
+        ha="center",
+        va="center",
+        fontsize=11,
+        clip_on=False
+    )
+
+
+    ax.text(
+        total + 28,
+        center_b,
+        (
+            f"{sag_label} "
+            f"({sag_transcript})"
+        ),
+        rotation=-90,
+        ha="center",
+        va="center",
+        fontsize=10,
+        clip_on=False
+    )
+
+
+    # --------------------------------------------------------
+    # Correct figure title
+    # --------------------------------------------------------
+
+    ax.set_title(
+        (
+            f"{eds1_label} × "
+            f"{sag_label} "
+            f"({sag_transcript})"
+        ),
+        fontsize=14,
+        pad=40
+    )
+
+
+    # --------------------------------------------------------
+    # Color bar
+    # --------------------------------------------------------
+
+    cbar = fig.colorbar(
+        image,
+        ax=ax,
+        fraction=0.046,
+        pad=0.10
+    )
+
+    cbar.set_label(
+        "Predicted aligned error (Å)",
+        fontsize=11
+    )
+
+
+    # --------------------------------------------------------
+    # Save with CORRECTED names
+    #
+    # Existing AF directories are untouched.
+    # --------------------------------------------------------
+
+    corrected_name = (
+        f"EDS1_{eds1_protein}"
+        f"__SAG101_{sag_protein}"
+        f"__{sag_transcript}"
+    )
+
+
+    png = (
+        FIGDIR
+        / f"{corrected_name}_PAE.png"
+    )
+
+    pdf = (
+        FIGDIR
+        / f"{corrected_name}_PAE.pdf"
+    )
+
+
+    fig.tight_layout()
+
+
+    fig.savefig(
+        png,
+        dpi=600,
+        bbox_inches="tight"
+    )
+
+    fig.savefig(
+        pdf,
+        bbox_inches="tight"
+    )
+
+    plt.close(fig)
+
+
+    # --------------------------------------------------------
+    # Print audit trail
+    # --------------------------------------------------------
+
+    print()
+    print("=" * 72)
+
+    print(
+        "Original AlphaFold job:",
+        complex_name
+    )
+
+    print(
+        "Correct SAG101 name:",
+        sag_label
+    )
+
+    print(
+        "Transcript:",
+        sag_transcript
+    )
+
+    print(
+        f"EDS1 residues:   {n_a}"
+    )
+
+    print(
+        f"SAG101 residues: {n_b}"
+    )
+
+    print(
+        f"Total residues:  {total}"
+    )
+
+    print(
+        f"Written:         {png}"
+    )
+
+
+print()
+print("=" * 72)
+print("PAE plotting complete.")
+print("=" * 72)
+print()
+
+print(
+    "Crosswalk used:"
+)
+
+print(
+    "SAG101_P9  -> "
+    "SAG101-P3  -> PB.18476.92"
+)
+
+print(
+    "SAG101_P12 -> "
+    "SAG101-P16 -> PB.18476.6"
+)
+
+print()
+
+
+
+
+python3 plot_AlphaFold3_full_PAE_matrices.py
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Perform additional AlphaFold3 modeling with VriSAG101 isoforms from other hybrids
+
+
+
+BASE="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+AFDIR="$BASE/SAG101_g309600_cross_genotype/AlphaFold3_crossbackground_EDS1_SAG101"
+
+mkdir -p "$AFDIR"/{sequences,json,outputs,logs,analysis/tables,analysis/figures}
+
+
+# write the scipt 
+nano \
+/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/setup_AlphaFold3_crossbackground_EDS1_SAG101.py
+
+#!/usr/bin/env python3
+
+# ============================================================
+# ALPHAFOLD 3 SETUP
+#
+# Cross-background SAG101 x EDS1 analysis
+#
+# Hold EDS1 protein states constant:
+#
+#   EDS1_P1
+#   EDS1_P2
+#   EDS1_P17
+#
+# Test four unique validated SAG101 protein groups:
+#
+#   PG001
+#   PG002
+#   PG003
+#   PG004
+#
+# Biological plotting groups:
+#
+#   Vrip_X_Vber:
+#       PG001
+#       PG004
+#
+#   Vrip_X_Vace:
+#       PG001
+#       PG002
+#
+#   Vripa:
+#       PG003
+#
+# ============================================================
+
+
+from pathlib import Path
+import json
+import re
+import csv
+
+
+# ============================================================
+# 1. PATHS
+# ============================================================
+
+BASE = Path(
+    "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+)
+
+
+EDS1_FASTA = (
+    BASE
+    / "WGCNA_Vrip_X_Vrup"
+    / "signed_network"
+    / "candidate_architecture"
+    / "EDS1_g351040_analysis"
+    / "step1_protein_comparison"
+    / "EDS1_g351040_three_focal_proteins.faa"
+)
+
+
+SAG101_FASTA = (
+    BASE
+    / "SAG101_g309600_cross_genotype"
+    / "validated_ORF_architecture"
+    / "SAG101_g309600_Validated_Protein_Groups.faa"
+)
+
+
+AFDIR = (
+    BASE
+    / "SAG101_g309600_cross_genotype"
+    / "AlphaFold3_crossbackground_EDS1_SAG101"
+)
+
+
+SEQDIR = AFDIR / "sequences"
+JSONDIR = AFDIR / "json"
+OUTDIR = AFDIR / "outputs"
+LOGDIR = AFDIR / "logs"
+ANALYSIS = AFDIR / "analysis"
+TABLES = ANALYSIS / "tables"
+FIGURES = ANALYSIS / "figures"
+
+
+for directory in [
+    AFDIR,
+    SEQDIR,
+    JSONDIR,
+    OUTDIR,
+    LOGDIR,
+    ANALYSIS,
+    TABLES,
+    FIGURES
+]:
+
+    directory.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+
+# ============================================================
+# 2. CHECK INPUTS
+# ============================================================
+
+for path in [
+    EDS1_FASTA,
+    SAG101_FASTA
+]:
+
+    if not path.exists():
+
+        raise FileNotFoundError(
+            path
+        )
+
+
+# ============================================================
+# 3. FASTA READER
+# ============================================================
+
+def read_fasta(
+    path
+):
+
+    records = {}
+
+    header = None
+    sequence = []
+
+
+    with open(
+        path
+    ) as fh:
+
+        for line in fh:
+
+            line = line.strip()
+
+
+            if not line:
+
+                continue
+
+
+            if line.startswith(
+                ">"
+            ):
+
+                if header is not None:
+
+                    records[
+                        header
+                    ] = "".join(
+                        sequence
+                    )
+
+
+                header = line[
+                    1:
+                ]
+
+
+                sequence = []
+
+
+            else:
+
+                sequence.append(
+                    line
+                )
+
+
+        if header is not None:
+
+            records[
+                header
+            ] = "".join(
+                sequence
+            )
+
+
+    return records
+
+
+# ============================================================
+# 4. READ SOURCE FASTAs
+# ============================================================
+
+eds1_records = read_fasta(
+    EDS1_FASTA
+)
+
+
+sag_records = read_fasta(
+    SAG101_FASTA
+)
+
+
+# ============================================================
+# 5. EXTRACT EDS1 PROTEINS
+#
+# Same exact-field matching used previously.
+# ============================================================
+
+def get_unique_by_pattern(
+    records,
+    pattern
+):
+
+    matches = []
+
+
+    for header, sequence in records.items():
+
+        tokens = re.split(
+            r"__|\|",
+            header
+        )
+
+
+        if pattern in tokens:
+
+            matches.append(
+                (
+                    header,
+                    sequence
+                )
+            )
+
+
+    if len(
+        matches
+    ) == 0:
+
+        raise ValueError(
+            f"No FASTA record matched exact label: "
+            f"{pattern}"
+        )
+
+
+    unique_sequences = {}
+
+
+    for header, sequence in matches:
+
+        sequence = (
+            sequence
+            .replace(
+                "*",
+                ""
+            )
+            .upper()
+        )
+
+
+        unique_sequences.setdefault(
+            sequence,
+            []
+        ).append(
+            header
+        )
+
+
+    if len(
+        unique_sequences
+    ) != 1:
+
+        raise ValueError(
+            f"{pattern} matched "
+            f"{len(unique_sequences)} unique sequences"
+        )
+
+
+    sequence = next(
+        iter(
+            unique_sequences
+        )
+    )
+
+
+    return (
+        sequence,
+        unique_sequences[
+            sequence
+        ]
+    )
+
+
+proteins = {}
+
+
+proteins[
+    "EDS1_P1"
+], _ = get_unique_by_pattern(
+    eds1_records,
+    "Protein_P1"
+)
+
+
+proteins[
+    "EDS1_P2"
+], _ = get_unique_by_pattern(
+    eds1_records,
+    "Protein_P2"
+)
+
+
+proteins[
+    "EDS1_P17"
+], _ = get_unique_by_pattern(
+    eds1_records,
+    "Protein_P17"
+)
+
+
+# ============================================================
+# 6. EXTRACT SAG101 PG GROUPS
+#
+# Validated PG FASTA headers have the form:
+#
+#   >PG001 length=...
+#
+# Therefore the first whitespace-separated token is the
+# protein-group identifier.
+# ============================================================
+
+required_pg = [
+    "PG001",
+    "PG002",
+    "PG003",
+    "PG004"
+]
+
+
+sag_by_id = {}
+
+
+for header, sequence in sag_records.items():
+
+    protein_id = header.split()[0]
+
+
+    sag_by_id[
+        protein_id
+    ] = (
+        sequence
+        .replace(
+            "*",
+            ""
+        )
+        .upper()
+    )
+
+
+for pg in required_pg:
+
+    if pg not in sag_by_id:
+
+        raise ValueError(
+            f"Required SAG101 protein group "
+            f"{pg} was not found in:\n"
+            f"{SAG101_FASTA}"
+        )
+
+
+    proteins[
+        f"SAG101_{pg}"
+    ] = sag_by_id[
+        pg
+    ]
+
+
+# ============================================================
+# 7. VALIDATE AMINO ACIDS
+# ============================================================
+
+VALID_AA = set(
+    "ACDEFGHIKLMNPQRSTVWY"
+)
+
+
+for name, sequence in proteins.items():
+
+    bad = (
+        set(
+            sequence
+        )
+        - VALID_AA
+    )
+
+
+    if bad:
+
+        raise ValueError(
+            f"{name} contains unexpected amino-acid "
+            f"characters: {sorted(bad)}"
+        )
+
+
+# ============================================================
+# 8. CHECK EXPECTED EDS1 LENGTHS
+#
+# These are already validated from the original analysis.
+# ============================================================
+
+expected_eds1_lengths = {
+
+    "EDS1_P1":
+        599,
+
+    "EDS1_P2":
+        610,
+
+    "EDS1_P17":
+        630
+}
+
+
+for name, expected in expected_eds1_lengths.items():
+
+    observed = len(
+        proteins[
+            name
+        ]
+    )
+
+
+    if observed != expected:
+
+        raise ValueError(
+            f"{name}: expected "
+            f"{expected} aa, observed "
+            f"{observed} aa"
+        )
+
+
+# ============================================================
+# 9. PRINT SAG101 LENGTHS
+#
+# Do not hard-code these because the validated longest-ORF
+# analysis is the source of truth.
+# ============================================================
+
+print()
+print(
+    "Validated SAG101 proteins:"
+)
+
+
+for pg in required_pg:
+
+    name = f"SAG101_{pg}"
+
+
+    print(
+        f"  {name:12s} "
+        f"{len(proteins[name]):4d} aa"
+    )
+
+
+# ============================================================
+# 10. WRITE CLEAN INDIVIDUAL FASTAs
+# ============================================================
+
+for name, sequence in proteins.items():
+
+    fasta_path = (
+        SEQDIR
+        / f"{name}.fasta"
+    )
+
+
+    with open(
+        fasta_path,
+        "w"
+    ) as out:
+
+        out.write(
+            f">{name}\n"
+        )
+
+
+        for i in range(
+            0,
+            len(
+                sequence
+            ),
+            80
+        ):
+
+            out.write(
+                sequence[
+                    i:i + 80
+                ]
+                + "\n"
+            )
+
+
+# ============================================================
+# 11. WRITE BIOLOGICAL BACKGROUND MAP
+#
+# This does NOT control AF3 inference.
+# It is used later for the separate figures.
+# ============================================================
+
+BACKGROUND_MAP = {
+
+    "Vrip_X_Vber": [
+        "PG001",
+        "PG004"
+    ],
+
+    "Vrip_X_Vace": [
+        "PG001",
+        "PG002"
+    ],
+
+    "Vripa": [
+        "PG003"
+    ]
+}
+
+
+background_file = (
+    AFDIR
+    / "SAG101_background_map.tsv"
+)
+
+
+with open(
+    background_file,
+    "w",
+    newline=""
+) as out:
+
+    writer = csv.writer(
+        out,
+        delimiter="\t"
+    )
+
+
+    writer.writerow(
+        [
+            "Reference",
+            "SAG101_Protein_Group"
+        ]
+    )
+
+
+    for reference, pgs in BACKGROUND_MAP.items():
+
+        for pg in pgs:
+
+            writer.writerow(
+                [
+                    reference,
+                    pg
+                ]
+            )
+
+
+# ============================================================
+# 12. COMPLEX DEFINITIONS
+#
+# Only unique sequence combinations are modeled.
+# ============================================================
+
+eds1_names = [
+    "EDS1_P1",
+    "EDS1_P2",
+    "EDS1_P17"
+]
+
+
+sag_names = [
+    "SAG101_PG001",
+    "SAG101_PG002",
+    "SAG101_PG003",
+    "SAG101_PG004"
+]
+
+
+jobs = []
+
+
+for eds1_name in eds1_names:
+
+    for sag_name in sag_names:
+
+        jobs.append({
+
+            "complex":
+                f"{eds1_name}__{sag_name}",
+
+            "chain_A":
+                eds1_name,
+
+            "chain_B":
+                sag_name,
+
+            "analysis":
+                "EDS1_SAG101_crossbackground",
+
+            "num_seeds":
+                5
+        })
+
+
+# ============================================================
+# 13. CREATE AF3 JSON FILES
+# ============================================================
+
+STARTING_SEED = 42
+
+
+for job in jobs:
+
+    complex_name = job[
+        "complex"
+    ]
+
+
+    chain_A = job[
+        "chain_A"
+    ]
+
+
+    chain_B = job[
+        "chain_B"
+    ]
+
+
+    af_input = {
+
+        "name":
+            complex_name,
+
+        "modelSeeds": [
+            STARTING_SEED
+        ],
+
+        "sequences": [
+
+            {
+                "protein": {
+
+                    "id":
+                        "A",
+
+                    "sequence":
+                        proteins[
+                            chain_A
+                        ]
+                }
+            },
+
+            {
+                "protein": {
+
+                    "id":
+                        "B",
+
+                    "sequence":
+                        proteins[
+                            chain_B
+                        ]
+                }
+            }
+        ],
+
+        "dialect":
+            "alphafold3",
+
+        "version":
+            1
+    }
+
+
+    json_path = (
+        JSONDIR
+        / f"{complex_name}.json"
+    )
+
+
+    with open(
+        json_path,
+        "w"
+    ) as out:
+
+        json.dump(
+            af_input,
+            out,
+            indent=2
+        )
+
+        out.write(
+            "\n"
+        )
+
+
+# ============================================================
+# 14. WRITE JOB MANIFEST
+# ============================================================
+
+MANIFEST = (
+    AFDIR
+    / "alphafold_jobs.tsv"
+)
+
+
+with open(
+    MANIFEST,
+    "w",
+    newline=""
+) as out:
+
+    writer = csv.writer(
+        out,
+        delimiter="\t"
+    )
+
+
+    writer.writerow(
+        [
+            "Job_Index",
+            "Complex",
+            "Analysis",
+            "Chain_A",
+            "Chain_B",
+            "Num_Seeds",
+            "JSON"
+        ]
+    )
+
+
+    for index, job in enumerate(
+        jobs,
+        start=1
+    ):
+
+        json_path = (
+            JSONDIR
+            / f"{job['complex']}.json"
+        )
+
+
+        writer.writerow(
+            [
+                index,
+                job[
+                    "complex"
+                ],
+                job[
+                    "analysis"
+                ],
+                job[
+                    "chain_A"
+                ],
+                job[
+                    "chain_B"
+                ],
+                job[
+                    "num_seeds"
+                ],
+                json_path
+            ]
+        )
+
+
+# ============================================================
+# 15. SUMMARY
+# ============================================================
+
+print()
+print(
+    "============================================================"
+)
+
+print(
+    "ALPHAFOLD 3 CROSS-BACKGROUND SETUP COMPLETE"
+)
+
+print(
+    "============================================================"
+)
+
+print()
+
+
+print(
+    "EDS1:"
+)
+
+
+for name in eds1_names:
+
+    print(
+        f"  {name:12s} "
+        f"{len(proteins[name]):4d} aa"
+    )
+
+
+print()
+print(
+    "SAG101:"
+)
+
+
+for name in sag_names:
+
+    print(
+        f"  {name:12s} "
+        f"{len(proteins[name]):4d} aa"
+    )
+
+
+print()
+print(
+    "Background map:"
+)
+
+
+for reference, pgs in BACKGROUND_MAP.items():
+
+    print(
+        f"  {reference}: "
+        f"{', '.join(pgs)}"
+    )
+
+
+print()
+print(
+    f"Unique complexes: {len(jobs)}"
+)
+
+
+print()
+print(
+    "Jobs:"
+)
+
+
+for index, job in enumerate(
+    jobs,
+    start=1
+):
+
+    print(
+        f"  {index:2d}  "
+        f"{job['complex']:30s}  "
+        f"{job['num_seeds']} seeds"
+    )
+
+
+print()
+print(
+    f"Manifest:\n{MANIFEST}"
+)
+
+print()
+print(
+    f"Background map:\n{background_file}"
+)
+
+
+python3 \
+/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/setup_AlphaFold3_crossbackground_EDS1_SAG101.py
+
+
+
+
+
+
+# run alphafold slurm array
+
+nano \
+/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/run_AlphaFold3_crossbackground_EDS1_SAG101.sh
+
+#!/bin/bash -l
+
+#SBATCH --job-name=AF3_SAGxEDS1
+#SBATCH --output=/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/SAG101_g309600_cross_genotype/AlphaFold3_crossbackground_EDS1_SAG101/logs/AF3_%A_%a.out
+#SBATCH --error=/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/SAG101_g309600_cross_genotype/AlphaFold3_crossbackground_EDS1_SAG101/logs/AF3_%A_%a.err
+#SBATCH --time=24:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --array=1-12%2
+#SBATCH -p gpu
+#SBATCH --gres=gpu:1
+#SBATCH --exclude=gpu05
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+
+set -euo pipefail
+
+
+# ============================================================
+# 1. LOAD ALPHAFOLD 3
+# ============================================================
+
+module purge
+
+module load alphafold/3.0.2
+
+
+# ============================================================
+# 2. PATHS
+# ============================================================
+
+BASE="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+AFDIR="$BASE/SAG101_g309600_cross_genotype/AlphaFold3_crossbackground_EDS1_SAG101"
+
+MANIFEST="$AFDIR/alphafold_jobs.tsv"
+
+
+# ============================================================
+# 3. CHECK ARRAY TASK
+# ============================================================
+
+if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]
+then
+
+    echo "ERROR:"
+    echo "This script must be submitted as a SLURM array."
+
+    exit 1
+
+fi
+
+
+# ============================================================
+# 4. FIND MANIFEST ROW
+# ============================================================
+
+LINE=$(awk \
+    -F'\t' \
+    -v id="$SLURM_ARRAY_TASK_ID" \
+    'NR > 1 && $1 == id {print}' \
+    "$MANIFEST"
+)
+
+
+if [[ -z "$LINE" ]]
+then
+
+    echo "ERROR:"
+    echo "No manifest row for array task:"
+    echo "$SLURM_ARRAY_TASK_ID"
+
+    exit 1
+
+fi
+
+
+IFS=$'\t' read -r \
+JOB_INDEX \
+COMPLEX \
+ANALYSIS \
+CHAIN_A \
+CHAIN_B \
+NUM_SEEDS \
+JSON_PATH \
+<<< "$LINE"
+
+
+# ============================================================
+# 5. OUTPUT
+# ============================================================
+
+OUTPUT_DIR="$AFDIR/outputs/$COMPLEX"
+
+mkdir -p "$OUTPUT_DIR"
+
+
+# ============================================================
+# 6. JOB INFORMATION
+# ============================================================
+
+echo
+echo "============================================================"
+echo "ALPHAFOLD 3 JOB"
+echo "============================================================"
+
+echo
+echo "Job index:       $JOB_INDEX"
+echo "Complex:         $COMPLEX"
+echo "Chain A:         $CHAIN_A"
+echo "Chain B:         $CHAIN_B"
+echo "Seeds:           $NUM_SEEDS"
+
+echo
+echo "JSON:"
+echo "$JSON_PATH"
+
+echo
+echo "Output:"
+echo "$OUTPUT_DIR"
+
+
+# ============================================================
+# 7. CHECK INPUTS
+# ============================================================
+
+if [[ ! -f "$MANIFEST" ]]
+then
+
+    echo "ERROR: manifest missing"
+    exit 1
+
+fi
+
+
+if [[ ! -f "$JSON_PATH" ]]
+then
+
+    echo "ERROR: JSON missing:"
+    echo "$JSON_PATH"
+    exit 1
+
+fi
+
+
+if [[ ! -f "$ALPHAFOLD_SING" ]]
+then
+
+    echo "ERROR: AlphaFold container missing:"
+    echo "$ALPHAFOLD_SING"
+    exit 1
+
+fi
+
+
+if [[ ! -d "$ALPHAFOLD_DB" ]]
+then
+
+    echo "ERROR: AlphaFold DB missing:"
+    echo "$ALPHAFOLD_DB"
+    exit 1
+
+fi
+
+
+if [[ ! -d "$ALPHAFOLD_DB/model" ]]
+then
+
+    echo "ERROR: AlphaFold model directory missing:"
+    echo "$ALPHAFOLD_DB/model"
+    exit 1
+
+fi
+
+
+# ============================================================
+# 8. GPU
+# ============================================================
+
+nvidia-smi
+
+
+# ============================================================
+# 9. RUN AF3
+# ============================================================
+
+singularity exec \
+    --nv \
+    "$ALPHAFOLD_SING" \
+    python3 \
+    /app/alphafold/run_alphafold.py \
+    --json_path="$JSON_PATH" \
+    --model_dir="$ALPHAFOLD_DB/model" \
+    --db_dir="$ALPHAFOLD_DB" \
+    --output_dir="$OUTPUT_DIR" \
+    --num_seeds="$NUM_SEEDS" \
+    --run_data_pipeline \
+    --run_inference
+
+
+# ============================================================
+# 10. FINISHED
+# ============================================================
+
+echo
+echo "============================================================"
+echo "ALPHAFOLD 3 COMPLETE"
+echo "============================================================"
+
+echo
+echo "$COMPLEX"
+echo
+
+find "$OUTPUT_DIR" \
+    -maxdepth 3 \
+    -type f \
+    | sort
+    
+    
+sbatch run_AlphaFold3_crossbackground_EDS1_SAG101.sh
+
+# Submitted batch job 29642611
+
+
+
+
+
+
+
+
+
+
+#### plot model data : ipTM, mean inter-chain PAE, and fraction of inter-chain residue pairs with PAE <10 Å.
+
+srun --mem=50g --cpus-per-task 1 --time=01:30:00 --pty bash -l
+cd /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2
+
+nano \
+/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/analyze_plot_AlphaFold3_crossbackground_SAG101.py
+
+#!/usr/bin/env python3
+
+
+# ============================================================
+# ALPHAFOLD 3
+# CROSS-BACKGROUND EDS1 x SAG101 ANALYSIS + FIGURES
+#
+# Input:
+#
+#   12 completed AF3 complexes:
+#
+#       EDS1 P1, P2, P17
+#           x
+#       SAG101 PG001, PG002, PG003, PG004
+#
+#
+# Biological background figures:
+#
+#   Vrip_X_Vber:
+#       PG001
+#       PG004
+#
+#   Vrip_X_Vace:
+#       PG001
+#       PG002
+#
+#   Vripa:
+#       PG003
+# ============================================================
+
+
+from pathlib import Path
+
+import json
+import csv
+import math
+
+import pandas as pd
+import numpy as np
+
+import matplotlib.pyplot as plt
+
+
+# ============================================================
+# 1. PATHS
+# ============================================================
+
+BASE = Path(
+    "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+)
+
+
+AFDIR = (
+    BASE
+    / "SAG101_g309600_cross_genotype"
+    / "AlphaFold3_crossbackground_EDS1_SAG101"
+)
+
+
+OUTPUTS = (
+    AFDIR
+    / "outputs"
+)
+
+
+ANALYSIS = (
+    AFDIR
+    / "analysis"
+)
+
+
+TABLES = (
+    ANALYSIS
+    / "tables"
+)
+
+
+FIGURES = (
+    ANALYSIS
+    / "figures"
+)
+
+
+TABLES.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+FIGURES.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+# ============================================================
+# 2. EXPECTED COMPLEXES
+# ============================================================
+
+EDS1_ORDER = [
+    "P1",
+    "P2",
+    "P17"
+]
+
+
+SAG101_ORDER = [
+    "PG001",
+    "PG002",
+    "PG003",
+    "PG004"
+]
+
+
+EXPECTED_COMPLEXES = [
+
+    f"EDS1_{eds1}__SAG101_{sag}"
+
+    for eds1 in EDS1_ORDER
+
+    for sag in SAG101_ORDER
+]
+
+
+# ============================================================
+# 3. BIOLOGICAL BACKGROUND DEFINITIONS
+# ============================================================
+
+BACKGROUND_MAP = {
+
+    "Vrip_X_Vber": [
+        "PG001",
+        "PG004"
+    ],
+
+    "Vrip_X_Vace": [
+        "PG001",
+        "PG002"
+    ],
+
+    "Vripa": [
+        "PG003"
+    ]
+}
+
+
+# ============================================================
+# 4. CHECK OUTPUT DIRECTORY
+# ============================================================
+
+if not OUTPUTS.exists():
+
+    raise FileNotFoundError(
+        f"\nAF3 output directory does not exist:\n"
+        f"{OUTPUTS}\n"
+    )
+
+
+complex_dirs = sorted(
+
+    p
+    for p in OUTPUTS.iterdir()
+
+    if p.is_dir()
+)
+
+
+print()
+print(
+    "=" * 78
+)
+
+print(
+    "ALPHAFOLD 3 CROSS-BACKGROUND EDS1 x SAG101 ANALYSIS"
+)
+
+print(
+    "=" * 78
+)
+
+print()
+
+print(
+    f"Output directory:\n{OUTPUTS}"
+)
+
+print()
+
+print(
+    f"Complex directories found: "
+    f"{len(complex_dirs)}"
+)
+
+print()
+
+
+# ============================================================
+# 5. HELPER:
+# SAFE NUMERIC VALUE
+# ============================================================
+
+def numeric_or_none(
+    x
+):
+
+    if x is None:
+
+        return None
+
+
+    try:
+
+        value = float(
+            x
+        )
+
+
+        if math.isnan(
+            value
+        ):
+
+            return None
+
+
+        return value
+
+
+    except:
+
+        return None
+
+
+# ============================================================
+# 6. HELPER:
+# LOCATE FULL CONFIDENCE FILE FOR A SUMMARY FILE
+#
+# AF3 normally gives:
+#
+#   *_summary_confidences.json
+#   *_confidences.json
+#
+# in the same directory.
+# ============================================================
+
+def confidence_for_summary(
+    summary_file
+):
+
+    name = summary_file.name
+
+
+    if not name.endswith(
+        "_summary_confidences.json"
+    ):
+
+        return None
+
+
+    confidence_name = name.replace(
+        "_summary_confidences.json",
+        "_confidences.json"
+    )
+
+
+    confidence_file = (
+        summary_file.parent
+        / confidence_name
+    )
+
+
+    if confidence_file.exists():
+
+        return confidence_file
+
+
+    # --------------------------------------------------------
+    # Fallback:
+    # if exact paired name is absent, accept a single
+    # confidence JSON in the same directory.
+    # --------------------------------------------------------
+
+    candidates = [
+
+        x
+
+        for x in summary_file.parent.glob(
+            "*_confidences.json"
+        )
+
+        if "_summary_confidences.json"
+        not in x.name
+    ]
+
+
+    if len(
+        candidates
+    ) == 1:
+
+        return candidates[
+            0
+        ]
+
+
+    return None
+
+
+# ============================================================
+# 7. HELPER:
+# CLASSIFY WHETHER RESULT IS A SEED/SAMPLE MODEL
+# ============================================================
+
+def seed_sample_from_path(
+    path
+):
+
+    seed = None
+    sample = None
+
+
+    for part in path.parts:
+
+        if part.startswith(
+            "seed-"
+        ) and "_sample-" in part:
+
+            try:
+
+                left, right = part.split(
+                    "_sample-"
+                )
+
+
+                seed = int(
+                    left.replace(
+                        "seed-",
+                        ""
+                    )
+                )
+
+
+                sample = int(
+                    right
+                )
+
+
+            except:
+
+                pass
+
+
+    return (
+        seed,
+        sample
+    )
+
+
+# ============================================================
+# 8. DISCOVER ALL MODEL RESULTS
+#
+# We search recursively because AF3 may organize output
+# slightly differently across module versions.
+# ============================================================
+
+all_model_rows = []
+
+
+for complex_dir in complex_dirs:
+
+    complex_name = complex_dir.name
+
+
+    summary_files = sorted(
+
+        complex_dir.rglob(
+            "*_summary_confidences.json"
+        )
+    )
+
+
+    print(
+        f"{complex_name}: "
+        f"{len(summary_files)} summary confidence files"
+    )
+
+
+    for summary_file in summary_files:
+
+        confidence_file = confidence_for_summary(
+            summary_file
+        )
+
+
+        if confidence_file is None:
+
+            continue
+
+
+        try:
+
+            with open(
+                summary_file
+            ) as fh:
+
+                summary = json.load(
+                    fh
+                )
+
+
+        except Exception as error:
+
+            print(
+                "  WARNING: could not read summary:"
+            )
+
+            print(
+                f"    {summary_file}"
+            )
+
+            print(
+                f"    {error}"
+            )
+
+            continue
+
+
+        seed, sample = seed_sample_from_path(
+            summary_file
+        )
+
+
+        all_model_rows.append({
+
+            "complex":
+                complex_name,
+
+            "seed":
+                seed,
+
+            "sample":
+                sample,
+
+            "ranking_score":
+                numeric_or_none(
+                    summary.get(
+                        "ranking_score"
+                    )
+                ),
+
+            "iptm":
+                numeric_or_none(
+                    summary.get(
+                        "iptm"
+                    )
+                ),
+
+            "ptm":
+                numeric_or_none(
+                    summary.get(
+                        "ptm"
+                    )
+                ),
+
+            "summary_file":
+                str(
+                    summary_file
+                ),
+
+            "confidence_file":
+                str(
+                    confidence_file
+                )
+        })
+
+
+if len(
+    all_model_rows
+) == 0:
+
+    raise RuntimeError(
+        "\nNo usable AF3 result files were found.\n"
+    )
+
+
+# ============================================================
+# 9. WRITE ALL MODEL RESULTS
+# ============================================================
+
+all_models_df = pd.DataFrame(
+    all_model_rows
+)
+
+
+all_models_file = (
+    TABLES
+    / "AlphaFold3_all_models_summary.csv"
+)
+
+
+all_models_df.to_csv(
+    all_models_file,
+    index=False
+)
+
+
+# ============================================================
+# 10. SELECT BEST MODEL FOR EACH COMPLEX
+#
+# Primary criterion:
+#   ranking_score
+#
+# Tie breakers:
+#   ipTM
+#   pTM
+# ============================================================
+
+def sorting_value(
+    x
+):
+
+    if x is None:
+
+        return -np.inf
+
+
+    try:
+
+        if np.isnan(
+            x
+        ):
+
+            return -np.inf
+
+    except:
+
+        pass
+
+
+    return x
+
+
+best_models = {}
+
+
+for complex_name in sorted(
+    all_models_df[
+        "complex"
+    ].unique()
+):
+
+    subset = [
+
+        row
+
+        for row in all_model_rows
+
+        if row[
+            "complex"
+        ] == complex_name
+    ]
+
+
+    best = max(
+
+        subset,
+
+        key=lambda row: (
+
+            sorting_value(
+                row[
+                    "ranking_score"
+                ]
+            ),
+
+            sorting_value(
+                row[
+                    "iptm"
+                ]
+            ),
+
+            sorting_value(
+                row[
+                    "ptm"
+                ]
+            )
+        )
+    )
+
+
+    best_models[
+        complex_name
+    ] = best
+
+
+# ============================================================
+# 11. CHECK EXPECTED COMPLEXES
+# ============================================================
+
+missing_complexes = [
+
+    complex_name
+
+    for complex_name in EXPECTED_COMPLEXES
+
+    if complex_name not in best_models
+]
+
+
+if missing_complexes:
+
+    print()
+    print(
+        "WARNING:"
+    )
+
+    print(
+        "The following expected complexes were not recovered:"
+    )
+
+
+    for x in missing_complexes:
+
+        print(
+            f"  {x}"
+        )
+
+
+    print()
+
+
+# ============================================================
+# 12. INTER-CHAIN PAE FUNCTION
+# ============================================================
+
+def analyze_interface(
+    complex_name,
+    model
+):
+
+    confidence_file = Path(
+        model[
+            "confidence_file"
+        ]
+    )
+
+
+    with open(
+        confidence_file
+    ) as fh:
+
+        confidence = json.load(
+            fh
+        )
+
+
+    if "pae" not in confidence:
+
+        raise ValueError(
+            f"{complex_name}: confidence JSON lacks 'pae'\n"
+            f"{confidence_file}"
+        )
+
+
+    if "token_chain_ids" not in confidence:
+
+        raise ValueError(
+            f"{complex_name}: confidence JSON lacks "
+            f"'token_chain_ids'\n"
+            f"{confidence_file}"
+        )
+
+
+    pae = np.asarray(
+        confidence[
+            "pae"
+        ],
+        dtype=float
+    )
+
+
+    chain_ids = list(
+        confidence[
+            "token_chain_ids"
+        ]
+    )
+
+
+    unique_chains = []
+
+
+    for chain in chain_ids:
+
+        if chain not in unique_chains:
+
+            unique_chains.append(
+                chain
+            )
+
+
+    if len(
+        unique_chains
+    ) != 2:
+
+        raise ValueError(
+            f"{complex_name}: expected 2 chains, "
+            f"found {unique_chains}"
+        )
+
+
+    chain_a = unique_chains[
+        0
+    ]
+
+
+    chain_b = unique_chains[
+        1
+    ]
+
+
+    idx_a = np.array(
+
+        [
+            i
+
+            for i, chain in enumerate(
+                chain_ids
+            )
+
+            if chain == chain_a
+        ],
+
+        dtype=int
+    )
+
+
+    idx_b = np.array(
+
+        [
+            i
+
+            for i, chain in enumerate(
+                chain_ids
+            )
+
+            if chain == chain_b
+        ],
+
+        dtype=int
+    )
+
+
+    if (
+        len(
+            idx_a
+        ) == 0
+        or
+        len(
+            idx_b
+        ) == 0
+    ):
+
+        raise ValueError(
+            f"{complex_name}: empty chain index."
+        )
+
+
+    # --------------------------------------------------------
+    # Directional blocks:
+    #
+    #   A -> B
+    #   B -> A
+    #
+    # As in the previous analysis, combine both directions.
+    # --------------------------------------------------------
+
+    ab = pae[
+        np.ix_(
+            idx_a,
+            idx_b
+        )
+    ].ravel()
+
+
+    ba = pae[
+        np.ix_(
+            idx_b,
+            idx_a
+        )
+    ].ravel()
+
+
+    combined = np.concatenate(
+        [
+            ab,
+            ba
+        ]
+    )
+
+
+    def fraction_below(
+        cutoff
+    ):
+
+        return float(
+            np.mean(
+                combined < cutoff
+            )
+        )
+
+
+    left, right = complex_name.split(
+        "__"
+    )
+
+
+    eds1 = left.replace(
+        "EDS1_",
+        ""
+    )
+
+
+    sag101 = right.replace(
+        "SAG101_",
+        ""
+    )
+
+
+    return {
+
+        "complex":
+            complex_name,
+
+        "EDS1":
+            eds1,
+
+        "SAG101":
+            sag101,
+
+        "best_seed":
+            model[
+                "seed"
+            ],
+
+        "best_sample":
+            model[
+                "sample"
+            ],
+
+        "ranking_score":
+            model[
+                "ranking_score"
+            ],
+
+        "iptm":
+            model[
+                "iptm"
+            ],
+
+        "ptm":
+            model[
+                "ptm"
+            ],
+
+        "chain_A":
+            chain_a,
+
+        "chain_B":
+            chain_b,
+
+        "n_tokens_A":
+            len(
+                idx_a
+            ),
+
+        "n_tokens_B":
+            len(
+                idx_b
+            ),
+
+        "n_interchain_values":
+            len(
+                combined
+            ),
+
+        "mean_interchain_PAE":
+            float(
+                np.mean(
+                    combined
+                )
+            ),
+
+        "median_interchain_PAE":
+            float(
+                np.median(
+                    combined
+                )
+            ),
+
+        "min_interchain_PAE":
+            float(
+                np.min(
+                    combined
+                )
+            ),
+
+        "fraction_interchain_PAE_lt5":
+            fraction_below(
+                5
+            ),
+
+        "fraction_interchain_PAE_lt10":
+            fraction_below(
+                10
+            ),
+
+        "fraction_interchain_PAE_lt15":
+            fraction_below(
+                15
+            ),
+
+        "summary_file":
+            model[
+                "summary_file"
+            ],
+
+        "confidence_file":
+            model[
+                "confidence_file"
+            ]
+    }
+
+
+# ============================================================
+# 13. ANALYZE BEST MODEL FOR EACH COMPLEX
+# ============================================================
+
+interface_rows = []
+
+
+for complex_name in EXPECTED_COMPLEXES:
+
+    if complex_name not in best_models:
+
+        continue
+
+
+    print()
+    print(
+        f"Analyzing {complex_name}"
+    )
+
+
+    row = analyze_interface(
+
+        complex_name,
+        best_models[
+            complex_name
+        ]
+    )
+
+
+    interface_rows.append(
+        row
+    )
+
+
+    print(
+        f"  best ranking score:     "
+        f"{row['ranking_score']:.3f}"
+    )
+
+
+    print(
+        f"  ipTM:                   "
+        f"{row['iptm']:.3f}"
+    )
+
+
+    print(
+        f"  mean inter-chain PAE:   "
+        f"{row['mean_interchain_PAE']:.2f} A"
+    )
+
+
+    print(
+        f"  fraction PAE <10 A:     "
+        f"{row['fraction_interchain_PAE_lt10']:.3f}"
+    )
+
+
+# ============================================================
+# 14. CREATE MASTER INTERFACE TABLE
+# ============================================================
+
+interface_df = pd.DataFrame(
+    interface_rows
+)
+
+
+interface_df[
+    "EDS1"
+] = pd.Categorical(
+
+    interface_df[
+        "EDS1"
+    ],
+
+    categories=
+        EDS1_ORDER,
+
+    ordered=True
+)
+
+
+interface_df[
+    "SAG101"
+] = pd.Categorical(
+
+    interface_df[
+        "SAG101"
+    ],
+
+    categories=
+        SAG101_ORDER,
+
+    ordered=True
+)
+
+
+interface_df = interface_df.sort_values(
+
+    [
+        "EDS1",
+        "SAG101"
+    ]
+)
+
+
+master_table = (
+
+    TABLES
+    / "AlphaFold3_crossbackground_interface_summary.csv"
+)
+
+
+interface_df.to_csv(
+    master_table,
+    index=False
+)
+
+
+# ============================================================
+# 15. PRINT COMPACT MASTER RESULTS
+# ============================================================
+
+print()
+print(
+    "=" * 78
+)
+
+print(
+    "BEST-MODEL INTERFACE RESULTS"
+)
+
+print(
+    "=" * 78
+)
+
+print()
+
+
+print(
+
+    interface_df[
+        [
+            "EDS1",
+            "SAG101",
+            "iptm",
+            "mean_interchain_PAE",
+            "fraction_interchain_PAE_lt10"
+        ]
+    ].to_string(
+        index=False
+    )
+)
+
+
+# ============================================================
+# 16. HEATMAP FUNCTION
+# ============================================================
+
+def plot_heatmap(
+    matrix,
+    title,
+    xlabel,
+    ylabel,
+    cbar_label,
+    outfile,
+    decimals=2,
+    vmin=None,
+    vmax=None
+):
+
+    data = matrix.to_numpy(
+        dtype=float
+    )
+
+
+    n_rows = len(
+        matrix.index
+    )
+
+
+    n_cols = len(
+        matrix.columns
+    )
+
+
+    width = max(
+        4.8,
+        1.4 * n_cols +
+        2.5
+    )
+
+
+    height = max(
+        4.2,
+        0.9 * n_rows +
+        2.0
+    )
+
+
+    fig, ax = plt.subplots(
+        figsize=(
+            width,
+            height
+        )
+    )
+
+
+    im = ax.imshow(
+
+        data,
+
+        aspect="auto",
+
+        vmin=vmin,
+
+        vmax=vmax
+    )
+
+
+    cbar = fig.colorbar(
+        im,
+        ax=ax,
+        shrink=0.82
+    )
+
+
+    cbar.set_label(
+        cbar_label
+    )
+
+
+    ax.set_xticks(
+        np.arange(
+            n_cols
+        )
+    )
+
+
+    ax.set_xticklabels(
+        matrix.columns
+    )
+
+
+    ax.set_yticks(
+        np.arange(
+            n_rows
+        )
+    )
+
+
+    ax.set_yticklabels(
+        matrix.index
+    )
+
+
+    ax.set_xlabel(
+        xlabel
+    )
+
+
+    ax.set_ylabel(
+        ylabel
+    )
+
+
+    ax.set_title(
+        title
+    )
+
+
+    # --------------------------------------------------------
+    # Cell values
+    # --------------------------------------------------------
+
+    for i in range(
+        n_rows
+    ):
+
+        for j in range(
+            n_cols
+        ):
+
+            value = data[
+                i,
+                j
+            ]
+
+
+            if np.isnan(
+                value
+            ):
+
+                label = "NA"
+
+            else:
+
+                label = (
+                    f"{value:.{decimals}f}"
+                )
+
+
+            ax.text(
+
+                j,
+                i,
+                label,
+
+                ha="center",
+                va="center",
+
+                fontsize=10
+            )
+
+
+    fig.tight_layout()
+
+
+    fig.savefig(
+
+        outfile.with_suffix(
+            ".pdf"
+        ),
+
+        bbox_inches="tight"
+    )
+
+
+    fig.savefig(
+
+        outfile.with_suffix(
+            ".png"
+        ),
+
+        dpi=600,
+
+        bbox_inches="tight"
+    )
+
+
+    plt.close(
+        fig
+    )
+
+
+# ============================================================
+# 17. THREE-PANEL FIGURE FUNCTION
+# ============================================================
+
+def plot_three_panel(
+    subset,
+    background,
+    sag_order
+):
+
+    metrics = [
+
+        (
+            "iptm",
+            "ipTM",
+            "Predicted interface confidence",
+            2,
+            0,
+            1
+        ),
+
+        (
+            "mean_interchain_PAE",
+            "Mean inter-chain PAE (A)",
+            "Inter-chain PAE",
+            2,
+            None,
+            None
+        ),
+
+        (
+            "fraction_interchain_PAE_lt10",
+            "Fraction PAE <10 A",
+            "Low-PAE inter-chain fraction",
+            3,
+            0,
+            1
+        )
+    ]
+
+
+    fig, axes = plt.subplots(
+
+        1,
+        3,
+
+        figsize=(
+            14,
+            4.8
+        )
+    )
+
+
+    for ax, (
+        metric,
+        cbar_label,
+        title,
+        decimals,
+        vmin,
+        vmax
+    ) in zip(
+        axes,
+        metrics
+    ):
+
+        matrix = subset.pivot(
+
+            index=
+                "EDS1",
+
+            columns=
+                "SAG101",
+
+            values=
+                metric
+        )
+
+
+        matrix = matrix.reindex(
+
+            index=
+                EDS1_ORDER,
+
+            columns=
+                sag_order
+        )
+
+
+        data = matrix.to_numpy(
+            dtype=float
+        )
+
+
+        im = ax.imshow(
+
+            data,
+
+            aspect="auto",
+
+            vmin=vmin,
+
+            vmax=vmax
+        )
+
+
+        ax.set_xticks(
+            np.arange(
+                len(
+                    sag_order
+                )
+            )
+        )
+
+
+        ax.set_xticklabels(
+            sag_order
+        )
+
+
+        ax.set_yticks(
+            np.arange(
+                len(
+                    EDS1_ORDER
+                )
+            )
+        )
+
+
+        ax.set_yticklabels(
+            EDS1_ORDER
+        )
+
+
+        ax.set_xlabel(
+            "SAG101 protein group"
+        )
+
+
+        ax.set_ylabel(
+            "EDS1 protein isoform"
+        )
+
+
+        ax.set_title(
+            title
+        )
+
+
+        for i in range(
+            len(
+                EDS1_ORDER
+            )
+        ):
+
+            for j in range(
+                len(
+                    sag_order
+                )
+            ):
+
+                value = data[
+                    i,
+                    j
+                ]
+
+
+                if np.isnan(
+                    value
+                ):
+
+                    label = "NA"
+
+                else:
+
+                    label = (
+                        f"{value:.{decimals}f}"
+                    )
+
+
+                ax.text(
+
+                    j,
+                    i,
+                    label,
+
+                    ha="center",
+                    va="center",
+
+                    fontsize=9
+                )
+
+
+        cbar = fig.colorbar(
+
+            im,
+            ax=ax,
+
+            fraction=0.046,
+            pad=0.04
+        )
+
+
+        cbar.set_label(
+            cbar_label
+        )
+
+
+    fig.suptitle(
+
+        f"{background}: "
+        f"EDS1-SAG101 AlphaFold 3 interface metrics",
+
+        fontsize=14
+    )
+
+
+    fig.tight_layout(
+        rect=[
+            0,
+            0,
+            1,
+            0.93
+        ]
+    )
+
+
+    outfile = (
+
+        FIGURES
+        / (
+            f"{background}_"
+            f"EDS1_SAG101_"
+            f"three_metric_heatmaps"
+        )
+    )
+
+
+    fig.savefig(
+
+        outfile.with_suffix(
+            ".pdf"
+        ),
+
+        bbox_inches="tight"
+    )
+
+
+    fig.savefig(
+
+        outfile.with_suffix(
+            ".png"
+        ),
+
+        dpi=600,
+
+        bbox_inches="tight"
+    )
+
+
+    plt.close(
+        fig
+    )
+
+
+# ============================================================
+# 18. BACKGROUND-SPECIFIC FIGURES
+# ============================================================
+
+for background, sag_order in BACKGROUND_MAP.items():
+
+    print()
+    print(
+        "=" * 78
+    )
+
+    print(
+        background
+    )
+
+    print(
+        "=" * 78
+    )
+
+
+    subset = interface_df[
+        interface_df[
+            "SAG101"
+        ].astype(
+            str
+        ).isin(
+            sag_order
+        )
+    ].copy()
+
+
+    # --------------------------------------------------------
+    # Enforce desired categorical order
+    # --------------------------------------------------------
+
+    subset[
+        "EDS1"
+    ] = pd.Categorical(
+
+        subset[
+            "EDS1"
+        ].astype(
+            str
+        ),
+
+        categories=
+            EDS1_ORDER,
+
+        ordered=True
+    )
+
+
+    subset[
+        "SAG101"
+    ] = pd.Categorical(
+
+        subset[
+            "SAG101"
+        ].astype(
+            str
+        ),
+
+        categories=
+            sag_order,
+
+        ordered=True
+    )
+
+
+    subset = subset.sort_values(
+
+        [
+            "EDS1",
+            "SAG101"
+        ]
+    )
+
+
+    # --------------------------------------------------------
+    # Save background-specific table
+    # --------------------------------------------------------
+
+    background_table = (
+
+        TABLES
+        / (
+            f"{background}_"
+            f"EDS1_SAG101_metrics.csv"
+        )
+    )
+
+
+    subset.to_csv(
+        background_table,
+        index=False
+    )
+
+
+    print()
+
+    print(
+
+        subset[
+            [
+                "EDS1",
+                "SAG101",
+                "iptm",
+                "mean_interchain_PAE",
+                "fraction_interchain_PAE_lt10"
+            ]
+        ].to_string(
+            index=False
+        )
+    )
+
+
+    # ========================================================
+    # ipTM
+    # ========================================================
+
+    iptm_matrix = subset.pivot(
+
+        index=
+            "EDS1",
+
+        columns=
+            "SAG101",
+
+        values=
+            "iptm"
+    )
+
+
+    iptm_matrix = iptm_matrix.reindex(
+
+        index=
+            EDS1_ORDER,
+
+        columns=
+            sag_order
+    )
+
+
+    plot_heatmap(
+
+        matrix=
+            iptm_matrix,
+
+        title=(
+            f"{background}\n"
+            "EDS1-SAG101 predicted interface confidence"
+        ),
+
+        xlabel=
+            "SAG101 protein group",
+
+        ylabel=
+            "EDS1 protein isoform",
+
+        cbar_label=
+            "ipTM",
+
+        outfile=(
+            FIGURES
+            / (
+                f"{background}_"
+                f"EDS1_SAG101_ipTM"
+            )
+        ),
+
+        decimals=
+            2,
+
+        vmin=
+            0,
+
+        vmax=
+            1
+    )
+
+
+    # ========================================================
+    # MEAN INTER-CHAIN PAE
+    # ========================================================
+
+    pae_matrix = subset.pivot(
+
+        index=
+            "EDS1",
+
+        columns=
+            "SAG101",
+
+        values=
+            "mean_interchain_PAE"
+    )
+
+
+    pae_matrix = pae_matrix.reindex(
+
+        index=
+            EDS1_ORDER,
+
+        columns=
+            sag_order
+    )
+
+
+    plot_heatmap(
+
+        matrix=
+            pae_matrix,
+
+        title=(
+            f"{background}\n"
+            "EDS1-SAG101 inter-chain PAE"
+        ),
+
+        xlabel=
+            "SAG101 protein group",
+
+        ylabel=
+            "EDS1 protein isoform",
+
+        cbar_label=
+            "Mean inter-chain PAE (A)",
+
+        outfile=(
+            FIGURES
+            / (
+                f"{background}_"
+                f"EDS1_SAG101_mean_interchain_PAE"
+            )
+        ),
+
+        decimals=
+            2
+    )
+
+
+    # ========================================================
+    # FRACTION PAE <10 A
+    # ========================================================
+
+    pae10_matrix = subset.pivot(
+
+        index=
+            "EDS1",
+
+        columns=
+            "SAG101",
+
+        values=
+            "fraction_interchain_PAE_lt10"
+    )
+
+
+    pae10_matrix = pae10_matrix.reindex(
+
+        index=
+            EDS1_ORDER,
+
+        columns=
+            sag_order
+    )
+
+
+    plot_heatmap(
+
+        matrix=
+            pae10_matrix,
+
+        title=(
+            f"{background}\n"
+            "EDS1-SAG101 low-PAE inter-chain fraction"
+        ),
+
+        xlabel=
+            "SAG101 protein group",
+
+        ylabel=
+            "EDS1 protein isoform",
+
+        cbar_label=(
+            "Fraction of residue pairs "
+            "with PAE <10 A"
+        ),
+
+        outfile=(
+            FIGURES
+            / (
+                f"{background}_"
+                f"EDS1_SAG101_fraction_PAE_lt10"
+            )
+        ),
+
+        decimals=
+            3,
+
+        vmin=
+            0,
+
+        vmax=
+            1
+    )
+
+
+    # ========================================================
+    # THREE-METRIC COMBINED FIGURE
+    # ========================================================
+
+    plot_three_panel(
+
+        subset=
+            subset,
+
+        background=
+            background,
+
+        sag_order=
+            sag_order
+    )
+
+
+# ============================================================
+# 19. PAIRWISE SAG101 CHANGE TABLES
+#
+# These are meaningful only where two SAG101 proteins are
+# represented in the background.
+#
+#
+# Vrip_X_Vber:
+#
+#   PG004 - PG001
+#
+#
+# Vrip_X_Vace:
+#
+#   PG002 - PG001
+#
+# ============================================================
+
+PAIRWISE_COMPARISONS = {
+
+    "Vrip_X_Vber": (
+        "PG001",
+        "PG004"
+    ),
+
+    "Vrip_X_Vace": (
+        "PG001",
+        "PG002"
+    )
+}
+
+
+for background, (
+    baseline_pg,
+    alternate_pg
+) in PAIRWISE_COMPARISONS.items():
+
+    subset = interface_df[
+        interface_df[
+            "SAG101"
+        ].astype(
+            str
+        ).isin(
+            [
+                baseline_pg,
+                alternate_pg
+            ]
+        )
+    ].copy()
+
+
+    comparison_rows = []
+
+
+    for eds1 in EDS1_ORDER:
+
+        x = subset[
+
+            subset[
+                "EDS1"
+            ].astype(
+                str
+            ) == eds1
+
+        ].copy()
+
+
+        x[
+            "SAG101"
+        ] = x[
+            "SAG101"
+        ].astype(
+            str
+        )
+
+
+        x = x.set_index(
+            "SAG101"
+        )
+
+
+        if (
+            baseline_pg not in x.index
+            or
+            alternate_pg not in x.index
+        ):
+
+            continue
+
+
+        comparison_rows.append({
+
+            "Background":
+                background,
+
+            "EDS1":
+                eds1,
+
+            "Baseline_SAG101":
+                baseline_pg,
+
+            "Alternate_SAG101":
+                alternate_pg,
+
+            "Baseline_ipTM":
+                x.loc[
+                    baseline_pg,
+                    "iptm"
+                ],
+
+            "Alternate_ipTM":
+                x.loc[
+                    alternate_pg,
+                    "iptm"
+                ],
+
+            "Delta_ipTM":
+                (
+                    x.loc[
+                        alternate_pg,
+                        "iptm"
+                    ]
+                    -
+                    x.loc[
+                        baseline_pg,
+                        "iptm"
+                    ]
+                ),
+
+            "Baseline_mean_interchain_PAE":
+                x.loc[
+                    baseline_pg,
+                    "mean_interchain_PAE"
+                ],
+
+            "Alternate_mean_interchain_PAE":
+                x.loc[
+                    alternate_pg,
+                    "mean_interchain_PAE"
+                ],
+
+            "Delta_mean_interchain_PAE":
+                (
+                    x.loc[
+                        alternate_pg,
+                        "mean_interchain_PAE"
+                    ]
+                    -
+                    x.loc[
+                        baseline_pg,
+                        "mean_interchain_PAE"
+                    ]
+                ),
+
+            "Baseline_fraction_PAE_lt10":
+                x.loc[
+                    baseline_pg,
+                    "fraction_interchain_PAE_lt10"
+                ],
+
+            "Alternate_fraction_PAE_lt10":
+                x.loc[
+                    alternate_pg,
+                    "fraction_interchain_PAE_lt10"
+                ],
+
+            "Delta_fraction_PAE_lt10":
+                (
+                    x.loc[
+                        alternate_pg,
+                        "fraction_interchain_PAE_lt10"
+                    ]
+                    -
+                    x.loc[
+                        baseline_pg,
+                        "fraction_interchain_PAE_lt10"
+                    ]
+                )
+        })
+
+
+    comparison_df = pd.DataFrame(
+        comparison_rows
+    )
+
+
+    comparison_file = (
+
+        TABLES
+        / (
+            f"{background}_"
+            f"SAG101_pairwise_change.csv"
+        )
+    )
+
+
+    comparison_df.to_csv(
+        comparison_file,
+        index=False
+    )
+
+
+    print()
+    print(
+        f"{background}: "
+        f"{alternate_pg} - {baseline_pg}"
+    )
+
+    print()
+
+
+    if len(
+        comparison_df
+    ) > 0:
+
+        print(
+            comparison_df.to_string(
+                index=False
+            )
+        )
+
+
+# ============================================================
+# 20. FINAL SUMMARY
+# ============================================================
+
+print()
+print(
+    "=" * 78
+)
+
+print(
+    "ANALYSIS COMPLETE"
+)
+
+print(
+    "=" * 78
+)
+
+print()
+
+print(
+    f"Complexes analyzed: "
+    f"{len(interface_df)} / "
+    f"{len(EXPECTED_COMPLEXES)}"
+)
+
+print()
+
+print(
+    "Master interface table:"
+)
+
+print(
+    master_table
+)
+
+print()
+
+print(
+    "Figure directory:"
+)
+
+print(
+    FIGURES
+)
+
+print()
+
+print(
+    "Expected biological figures:"
+)
+
+for background in BACKGROUND_MAP:
+
+    print(
+        f"  {background}"
+    )
+
+    print(
+        "    ipTM"
+    )
+
+    print(
+        "    mean inter-chain PAE"
+    )
+
+    print(
+        "    fraction PAE <10 A"
+    )
+
+    print(
+        "    combined three-metric figure"
+    )
+
+print()
+
+
+
+python3 \
+/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/analyze_plot_AlphaFold3_crossbackground_SAG101.py
+
+
+
+
+# make whole-protein PAE heatmap 
+
+nano \
+/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/plot_AlphaFold3_crossbackground_full_PAE_matrices.py
+
+#!/usr/bin/env python3
+
+
+
+from pathlib import Path
+import json
+import math
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+# ============================================================
+# 1. PATHS
+# ============================================================
+
+BASE = Path(
+    "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+)
+
+
+AFDIR = (
+    BASE
+    / "SAG101_g309600_cross_genotype"
+    / "AlphaFold3_crossbackground_EDS1_SAG101"
+)
+
+
+OUTPUTS = (
+    AFDIR
+    / "outputs"
+)
+
+
+FIGDIR = (
+    AFDIR
+    / "analysis"
+    / "figures"
+    / "PAE_matrices"
+)
+
+
+FIGDIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+# ============================================================
+# 2. COMPLEX DEFINITIONS
+# ============================================================
+
+EDS1_FORMS = [
+    "P1",
+    "P2",
+    "P17"
+]
+
+
+SAG101_GROUPS = [
+    "PG001",
+    "PG002",
+    "PG003",
+    "PG004"
+]
+
+
+COMPLEXES = [
+
+    f"EDS1_{eds1}__SAG101_{sag}"
+
+    for eds1 in EDS1_FORMS
+
+    for sag in SAG101_GROUPS
+]
+
+
+# ============================================================
+# 3. BIOLOGICAL BACKGROUND MAP
+# ============================================================
+
+SAG101_BACKGROUND_MAP = {
+
+    "PG001":
+        "Vrip_X_Vber / Vrip_X_Vace",
+
+    "PG002":
+        "Vrip_X_Vace",
+
+    "PG003":
+        "Vripa",
+
+    "PG004":
+        "Vrip_X_Vber"
+}
+
+
+# ============================================================
+# 4. HELPER
+# ============================================================
+
+def safe_float(
+    value
+):
+
+    if value is None:
+
+        return None
+
+
+    try:
+
+        x = float(
+            value
+        )
+
+
+        if math.isnan(
+            x
+        ):
+
+            return None
+
+
+        return x
+
+
+    except:
+
+        return None
+
+
+# ============================================================
+# 5. FIND BEST MODEL FOR A COMPLEX
+# ============================================================
+
+def find_best_model(
+    complex_name
+):
+
+    complex_dir = (
+        OUTPUTS
+        / complex_name
+    )
+
+
+    if not complex_dir.exists():
+
+        print(
+            "Missing complex directory:",
+            complex_dir
+        )
+
+        return None
+
+
+    summary_files = sorted(
+
+        complex_dir.rglob(
+            "*_summary_confidences.json"
+        )
+    )
+
+
+    candidates = []
+
+
+    for summary_file in summary_files:
+
+        try:
+
+            with open(
+                summary_file
+            ) as fh:
+
+                summary = json.load(
+                    fh
+                )
+
+
+        except Exception as error:
+
+            print(
+                "Could not read:",
+                summary_file
+            )
+
+            print(
+                error
+            )
+
+            continue
+
+
+        # ----------------------------------------------------
+        # Find corresponding full confidence file
+        # ----------------------------------------------------
+
+        confidence_name = (
+            summary_file.name.replace(
+                "_summary_confidences.json",
+                "_confidences.json"
+            )
+        )
+
+
+        confidence_file = (
+            summary_file.parent
+            / confidence_name
+        )
+
+
+        # ----------------------------------------------------
+        # Fallback if exact paired filename not present
+        # ----------------------------------------------------
+
+        if not confidence_file.exists():
+
+            fallback = [
+
+                x
+
+                for x in summary_file.parent.glob(
+                    "*_confidences.json"
+                )
+
+                if "_summary_confidences.json"
+                not in x.name
+            ]
+
+
+            if len(
+                fallback
+            ) == 1:
+
+                confidence_file = fallback[
+                    0
+                ]
+
+
+        if not confidence_file.exists():
+
+            continue
+
+
+        candidates.append({
+
+            "summary_file":
+                summary_file,
+
+            "confidence_file":
+                confidence_file,
+
+            "ranking_score":
+                safe_float(
+                    summary.get(
+                        "ranking_score"
+                    )
+                ),
+
+            "iptm":
+                safe_float(
+                    summary.get(
+                        "iptm"
+                    )
+                ),
+
+            "ptm":
+                safe_float(
+                    summary.get(
+                        "ptm"
+                    )
+                )
+        })
+
+
+    if len(
+        candidates
+    ) == 0:
+
+        print(
+            "No usable models found for:",
+            complex_name
+        )
+
+        return None
+
+
+    def score(
+        row
+    ):
+
+        ranking = (
+            row[
+                "ranking_score"
+            ]
+            if row[
+                "ranking_score"
+            ] is not None
+            else -np.inf
+        )
+
+
+        iptm = (
+            row[
+                "iptm"
+            ]
+            if row[
+                "iptm"
+            ] is not None
+            else -np.inf
+        )
+
+
+        ptm = (
+            row[
+                "ptm"
+            ]
+            if row[
+                "ptm"
+            ] is not None
+            else -np.inf
+        )
+
+
+        return (
+            ranking,
+            iptm,
+            ptm
+        )
+
+
+    return max(
+        candidates,
+        key=score
+    )
+
+
+# ============================================================
+# 6. PLOT EACH COMPLEX
+# ============================================================
+
+for complex_name in COMPLEXES:
+
+    print()
+    print(
+        "=" * 76
+    )
+
+    print(
+        complex_name
+    )
+
+    print(
+        "=" * 76
+    )
+
+
+    best = find_best_model(
+        complex_name
+    )
+
+
+    if best is None:
+
+        continue
+
+
+    confidence_file = best[
+        "confidence_file"
+    ]
+
+
+    # --------------------------------------------------------
+    # Read confidence information
+    # --------------------------------------------------------
+
+    with open(
+        confidence_file
+    ) as fh:
+
+        data = json.load(
+            fh
+        )
+
+
+    if "pae" not in data:
+
+        print(
+            "Skipping: no PAE matrix"
+        )
+
+        continue
+
+
+    if "token_chain_ids" not in data:
+
+        print(
+            "Skipping: no token_chain_ids"
+        )
+
+        continue
+
+
+    pae = np.asarray(
+        data[
+            "pae"
+        ],
+        dtype=float
+    )
+
+
+    chain_ids = np.asarray(
+        data[
+            "token_chain_ids"
+        ]
+    )
+
+
+    # --------------------------------------------------------
+    # Identify chains in their actual order
+    # --------------------------------------------------------
+
+    chains = []
+
+
+    for chain in chain_ids:
+
+        if chain not in chains:
+
+            chains.append(
+                chain
+            )
+
+
+    if len(
+        chains
+    ) != 2:
+
+        print(
+            "Skipping:",
+            complex_name,
+            "expected 2 chains, found",
+            chains
+        )
+
+        continue
+
+
+    chain_a = chains[
+        0
+    ]
+
+
+    chain_b = chains[
+        1
+    ]
+
+
+    idx_a = np.where(
+        chain_ids == chain_a
+    )[0]
+
+
+    idx_b = np.where(
+        chain_ids == chain_b
+    )[0]
+
+
+    n_a = len(
+        idx_a
+    )
+
+
+    n_b = len(
+        idx_b
+    )
+
+
+    total = (
+        n_a
+        +
+        n_b
+    )
+
+
+    boundary = n_a
+
+
+    # --------------------------------------------------------
+    # Parse protein names
+    # --------------------------------------------------------
+
+    eds1_name, sag_name = (
+        complex_name.split(
+            "__"
+        )
+    )
+
+
+    eds1_protein = (
+        eds1_name.replace(
+            "EDS1_",
+            ""
+        )
+    )
+
+
+    sag_group = (
+        sag_name.replace(
+            "SAG101_",
+            ""
+        )
+    )
+
+
+    eds1_label = (
+        f"EDS1-{eds1_protein}"
+    )
+
+
+    sag_label = (
+        f"SAG101-{sag_group}"
+    )
+
+
+    background = (
+        SAG101_BACKGROUND_MAP.get(
+            sag_group,
+            "Unknown background"
+        )
+    )
+
+
+    # ========================================================
+    # 7. PLOT FULL PAE MATRIX
+    # ========================================================
+
+    fig, ax = plt.subplots(
+        figsize=(
+            7.4,
+            6.9
+        )
+    )
+
+
+    # --------------------------------------------------------
+    # Same scale/style as previous PAE figures
+    #
+    # low PAE = dark green
+    # high PAE = pale/white
+    # --------------------------------------------------------
+
+    image = ax.imshow(
+
+        pae,
+
+        origin="upper",
+
+        cmap="Greens_r",
+
+        vmin=0,
+
+        vmax=30,
+
+        interpolation="nearest"
+    )
+
+
+    # --------------------------------------------------------
+    # Chain boundaries
+    # --------------------------------------------------------
+
+    ax.axvline(
+
+        boundary - 0.5,
+
+        linewidth=1.5,
+
+        color="black"
+    )
+
+
+    ax.axhline(
+
+        boundary - 0.5,
+
+        linewidth=1.5,
+
+        color="black"
+    )
+
+
+    # --------------------------------------------------------
+    # Axis ticks
+    # --------------------------------------------------------
+
+    ticks = [
+
+        0,
+
+        boundary - 1,
+
+        total - 1
+    ]
+
+
+    labels = [
+
+        "1",
+
+        f"{boundary:,}",
+
+        f"{total:,}"
+    ]
+
+
+    ax.set_xticks(
+        ticks
+    )
+
+
+    ax.set_xticklabels(
+        labels
+    )
+
+
+    ax.set_yticks(
+        ticks
+    )
+
+
+    ax.set_yticklabels(
+        labels
+    )
+
+
+    # --------------------------------------------------------
+    # Axis labels
+    # --------------------------------------------------------
+
+    ax.set_xlabel(
+
+        "Scored residue",
+
+        fontsize=13
+    )
+
+
+    ax.set_ylabel(
+
+        "Aligned residue",
+
+        fontsize=13
+    )
+
+
+    # --------------------------------------------------------
+    # Protein centers
+    # --------------------------------------------------------
+
+    center_a = (
+        n_a
+        /
+        2
+    )
+
+
+    center_b = (
+        n_a
+        +
+        n_b
+        /
+        2
+    )
+
+
+    # --------------------------------------------------------
+    # Top chain labels
+    # --------------------------------------------------------
+
+    ax.text(
+
+        center_a,
+
+        -35,
+
+        eds1_label,
+
+        ha="center",
+
+        va="center",
+
+        fontsize=12,
+
+        clip_on=False
+    )
+
+
+    ax.text(
+
+        center_b,
+
+        -35,
+
+        sag_label,
+
+        ha="center",
+
+        va="center",
+
+        fontsize=12,
+
+        clip_on=False
+    )
+
+
+    # --------------------------------------------------------
+    # Right-side chain labels
+    # --------------------------------------------------------
+
+    ax.text(
+
+        total + 20,
+
+        center_a,
+
+        eds1_label,
+
+        rotation=-90,
+
+        ha="center",
+
+        va="center",
+
+        fontsize=11,
+
+        clip_on=False
+    )
+
+
+    ax.text(
+
+        total + 20,
+
+        center_b,
+
+        sag_label,
+
+        rotation=-90,
+
+        ha="center",
+
+        va="center",
+
+        fontsize=11,
+
+        clip_on=False
+    )
+
+
+    # --------------------------------------------------------
+    # Title
+    # --------------------------------------------------------
+
+    ax.set_title(
+
+        (
+            f"{eds1_label} × {sag_label}\n"
+            f"{background}"
+        ),
+
+        fontsize=14,
+
+        pad=36
+    )
+
+
+    # --------------------------------------------------------
+    # Color bar
+    # --------------------------------------------------------
+
+    cbar = fig.colorbar(
+
+        image,
+
+        ax=ax,
+
+        fraction=0.046,
+
+        pad=0.10
+    )
+
+
+    cbar.set_label(
+
+        "Predicted aligned error (Å)",
+
+        fontsize=11
+    )
+
+
+    # --------------------------------------------------------
+    # Save
+    # --------------------------------------------------------
+
+    outbase = (
+
+        FIGDIR
+        / complex_name
+    )
+
+
+    fig.tight_layout()
+
+
+    fig.savefig(
+
+        outbase.with_name(
+            outbase.name
+            + "_PAE.pdf"
+        ),
+
+        bbox_inches="tight"
+    )
+
+
+    fig.savefig(
+
+        outbase.with_name(
+            outbase.name
+            + "_PAE.png"
+        ),
+
+        dpi=600,
+
+        bbox_inches="tight"
+    )
+
+
+    plt.close(
+        fig
+    )
+
+
+    # --------------------------------------------------------
+    # Audit trail
+    # --------------------------------------------------------
+
+    print(
+        "Best confidence file:"
+    )
+
+    print(
+        confidence_file
+    )
+
+
+    print(
+        f"Ranking score:   "
+        f"{best['ranking_score']}"
+    )
+
+
+    print(
+        f"ipTM:            "
+        f"{best['iptm']}"
+    )
+
+
+    print(
+        f"EDS1 residues:    "
+        f"{n_a}"
+    )
+
+
+    print(
+        f"SAG101 residues:  "
+        f"{n_b}"
+    )
+
+
+    print(
+        f"Total residues:   "
+        f"{total}"
+    )
+
+
+    print(
+        "Background:       "
+        f"{background}"
+    )
+
+
+# ============================================================
+# 8. FINISHED
+# ============================================================
+
+print()
+print(
+    "=" * 76
+)
+
+print(
+    "FULL PAE PLOTTING COMPLETE"
+)
+
+print(
+    "=" * 76
+)
+
+print()
+
+print(
+    "Figures written to:"
+)
+
+print(
+    FIGDIR
+)
+
+print()
+
+
+python3 \
+/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/plot_AlphaFold3_crossbackground_full_PAE_matrices.py
+
+
+
+
+
+
+
+
