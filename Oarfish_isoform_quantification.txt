@@ -1,0 +1,1212 @@
+### Generate isoform count matrices
+### using minimap2 aligner, then Oarfish for quantification
+
+# create minimap2 index of the transcriptomes 
+
+#!/bin/bash -l
+#SBATCH --job-name=mm2_index
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
+#SBATCH --time=04:00:00
+#SBATCH --array=0-5
+#SBATCH -p epyc
+#SBATCH --output=logs/mm2_index_%A_%a.out
+#SBATCH --error=logs/mm2_index_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# ------------------------------------------------------------
+# Load minimap2
+# ------------------------------------------------------------
+
+module load minimap2
+
+echo "Using minimap2:"
+which minimap2
+minimap2 --version
+
+# ------------------------------------------------------------
+# Paths
+# ------------------------------------------------------------
+
+BASE_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+POOLED_DIR="${BASE_DIR}/pooled_genomes"
+INDEX_DIR="${BASE_DIR}/minimap2_transcriptome_indexes"
+
+mkdir -p "$INDEX_DIR" "${BASE_DIR}/logs"
+
+# ------------------------------------------------------------
+# Six reference-specific unified transcriptomes
+# ------------------------------------------------------------
+
+GENOMES=(
+    "Vrip_X_Vrup"
+    "Vber_X_Vrup"
+    "Vrip_X_Vber"
+    "Vrip_X_Vace"
+    "CabSauv08"
+    "Vripa"
+)
+
+GENOME=${GENOMES[$SLURM_ARRAY_TASK_ID]}
+
+TRANSCRIPTOME="${POOLED_DIR}/${GENOME}_unified.fasta"
+INDEX="${INDEX_DIR}/${GENOME}.mmi"
+
+echo "======================================================"
+echo "Building minimap2 transcriptome index"
+echo "Genome group:   $GENOME"
+echo "Transcriptome:  $TRANSCRIPTOME"
+echo "Index:          $INDEX"
+echo "======================================================"
+
+# ------------------------------------------------------------
+# Safety checks
+# ------------------------------------------------------------
+
+if [[ ! -f "$TRANSCRIPTOME" ]]; then
+    echo "ERROR: Transcriptome FASTA not found:"
+    echo "$TRANSCRIPTOME"
+    exit 1
+fi
+
+# Avoid silently overwriting an existing index
+if [[ -f "$INDEX" ]]; then
+    echo "Index already exists:"
+    echo "$INDEX"
+    echo "Skipping."
+    exit 0
+fi
+
+# ------------------------------------------------------------
+# Build minimap2 index
+# ------------------------------------------------------------
+
+/usr/bin/time -v minimap2 \
+    -x map-hifi \
+    -d "$INDEX" \
+    "$TRANSCRIPTOME"
+
+# ------------------------------------------------------------
+# Verify output
+# ------------------------------------------------------------
+
+if [[ ! -s "$INDEX" ]]; then
+    echo "ERROR: minimap2 index was not created successfully."
+    exit 1
+fi
+
+echo "======================================================"
+echo "Finished minimap2 index for $GENOME"
+ls -lh "$INDEX"
+echo "======================================================"
+
+# Submitted batch job 27913624
+
+
+
+
+
+
+
+
+
+### perform mm2 alignment of the flnc.bam files to the reference transcriptome models
+
+
+#!/bin/bash -l
+#SBATCH --job-name=mm2_tx_align
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=80G
+#SBATCH --time=48:00:00
+#SBATCH --array=1-62%10
+#SBATCH -p epyc
+#SBATCH --output=logs/mm2_tx_align_%A_%a.out
+#SBATCH --error=logs/mm2_tx_align_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# ------------------------------------------------------------
+# Software
+# ------------------------------------------------------------
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+
+# This environment already contains samtools from your Iso-Seq workflow
+conda activate "$HOME/.conda/envs/isoseq_run_env"
+
+# Use the cluster minimap2 installation
+module load minimap2
+
+echo "======================================================"
+echo "Software versions"
+echo "======================================================"
+echo -n "minimap2: "
+minimap2 --version
+echo -n "samtools: "
+samtools --version | head -n 1
+
+# ------------------------------------------------------------
+# Paths
+# ------------------------------------------------------------
+
+BASE_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+MANIFEST="${BASE_DIR}/manifest_final.csv"
+INDEX_DIR="${BASE_DIR}/minimap2_transcriptome_indexes"
+ALIGN_DIR="${BASE_DIR}/transcriptome_alignments"
+
+mkdir -p "$ALIGN_DIR" "${BASE_DIR}/logs"
+
+# ------------------------------------------------------------
+# Read current manifest row
+# ------------------------------------------------------------
+
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$MANIFEST")
+
+SAMPLE=$(printf '%s\n' "$LINE" | cut -f1)
+FLNC_BAM=$(printf '%s\n' "$LINE" | cut -f2)
+GENOME=$(printf '%s\n' "$LINE" | cut -f3)
+
+TX_INDEX="${INDEX_DIR}/${GENOME}.mmi"
+
+FINAL_BAM="${ALIGN_DIR}/${SAMPLE}.transcriptome.bam"
+TMP_BAM="${ALIGN_DIR}/${SAMPLE}.transcriptome.tmp.${SLURM_JOB_ID}.bam"
+
+echo "======================================================"
+echo "Sample:          $SAMPLE"
+echo "FLNC BAM:        $FLNC_BAM"
+echo "Reference group: $GENOME"
+echo "MM2 index:       $TX_INDEX"
+echo "Output BAM:      $FINAL_BAM"
+echo "======================================================"
+
+# ------------------------------------------------------------
+# Safety checks
+# ------------------------------------------------------------
+
+if [[ -z "$SAMPLE" || -z "$FLNC_BAM" || -z "$GENOME" ]]; then
+    echo "ERROR: Empty field in manifest row ${SLURM_ARRAY_TASK_ID}"
+    exit 1
+fi
+
+if [[ ! -f "$FLNC_BAM" ]]; then
+    echo "ERROR: FLNC BAM does not exist:"
+    echo "$FLNC_BAM"
+    exit 1
+fi
+
+if [[ ! -f "$TX_INDEX" ]]; then
+    echo "ERROR: minimap2 transcriptome index does not exist:"
+    echo "$TX_INDEX"
+    exit 1
+fi
+
+# ------------------------------------------------------------
+# Skip a previously completed alignment
+# ------------------------------------------------------------
+
+if [[ -f "$FINAL_BAM" ]]; then
+
+    if samtools quickcheck "$FINAL_BAM" 2>/dev/null; then
+        echo "Valid alignment BAM already exists."
+        echo "Skipping $SAMPLE."
+        exit 0
+    else
+        echo "WARNING: Existing BAM failed quickcheck."
+        echo "Removing incomplete BAM."
+        rm -f "$FINAL_BAM"
+    fi
+fi
+
+rm -f "$TMP_BAM"
+
+# ------------------------------------------------------------
+# Align original FLNC reads to unified transcriptome
+# ------------------------------------------------------------
+
+echo "Starting minimap2 transcriptome alignment..."
+
+samtools fastq -@ 2 "$FLNC_BAM" | \
+minimap2 \
+    -t 12 \
+    --eqx \
+    -N 100 \
+    --secondary=yes \
+    -ax map-hifi \
+    "$TX_INDEX" \
+    - | \
+samtools view \
+    -@ 2 \
+    -b \
+    -o "$TMP_BAM"
+
+# ------------------------------------------------------------
+# Validate output before accepting it
+# ------------------------------------------------------------
+
+echo "Checking BAM integrity..."
+
+samtools quickcheck -v "$TMP_BAM"
+
+mv "$TMP_BAM" "$FINAL_BAM"
+
+# ------------------------------------------------------------
+# Alignment summary
+# ------------------------------------------------------------
+
+echo "Generating alignment summary..."
+
+TOTAL=$(samtools view -c "$FINAL_BAM")
+PRIMARY=$(samtools view -c -F 0x100 "$FINAL_BAM")
+SECONDARY=$(samtools view -c -f 0x100 "$FINAL_BAM")
+UNMAPPED=$(samtools view -c -f 0x4 "$FINAL_BAM")
+
+echo "======================================================"
+echo "Alignment finished: $SAMPLE"
+echo "Total BAM records:      $TOTAL"
+echo "Primary records:        $PRIMARY"
+echo "Secondary records:      $SECONDARY"
+echo "Unmapped records:       $UNMAPPED"
+echo "Output: $FINAL_BAM"
+echo "======================================================"
+
+
+
+
+
+
+
+
+
+
+
+
+### Oarfish quantification step
+
+### First, set up the Oarfish conda environment 
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+
+mamba create -y \
+    -p /rhome/wcoll010/bigdata_groenlab/conda_envs/oarfish_env \
+    -c conda-forge \
+    -c bioconda \
+    oarfish
+
+
+
+
+
+
+
+### create index for Oarfish 
+
+#!/bin/bash -l
+#SBATCH --job-name=oarfish_index
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=80G
+#SBATCH --time=08:00:00
+#SBATCH --array=0-5
+#SBATCH -p epyc
+#SBATCH --output=logs/oarfish_index_%A_%a.out
+#SBATCH --error=logs/oarfish_index_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate /rhome/wcoll010/bigdata_groenlab/conda_envs/oarfish_env
+
+BASE_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+POOLED_DIR="${BASE_DIR}/pooled_genomes"
+INDEX_DIR="${BASE_DIR}/oarfish_indexes"
+
+mkdir -p "$INDEX_DIR" "${BASE_DIR}/logs"
+
+GENOMES=(
+    "Vrip_X_Vrup"
+    "Vber_X_Vrup"
+    "Vrip_X_Vber"
+    "Vrip_X_Vace"
+    "CabSauv08"
+    "Vripa"
+)
+
+GENOME=${GENOMES[$SLURM_ARRAY_TASK_ID]}
+
+TRANSCRIPTOME="${POOLED_DIR}/${GENOME}_unified.fasta"
+INDEX="${INDEX_DIR}/${GENOME}.oar"
+
+echo "Building Oarfish index for: $GENOME"
+echo "Transcriptome: $TRANSCRIPTOME"
+echo "Index: $INDEX"
+
+oarfish \
+    --annotated "$TRANSCRIPTOME" \
+    --only-index \
+    --index-out "$INDEX" \
+    --seq-tech pac-bio-hifi \
+    --threads "${SLURM_CPUS_PER_TASK}"
+
+echo "Finished $GENOME"
+
+
+
+# save as oarfish_index_transcriptomes.sh
+
+
+
+
+
+
+# Write a manifest file to read in all flnc.bam files 
+
+1103_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/1103_con_R1_flnc-5.bam	Vber_X_Vrup
+1103_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/1103_con_R2_flnc-1.bam	Vber_X_Vrup
+1103_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/1103_con_R3_flnc-3.bam	Vber_X_Vrup
+1103_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/1103_inf_R1_flnc-4.bam	Vber_X_Vrup
+1103_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/1103_inf_R2_flnc-2.bam	Vber_X_Vrup
+1103_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/1103_inf_R3_flnc-2.bam	Vber_X_Vrup
+3309_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/3309_con_R1_flnc-2.bam	Vrip_X_Vrup
+3309_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/3309_con_R2_flnc-4.bam	Vrip_X_Vrup
+3309_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/3309_con_R3_flnc-3.bam	Vrip_X_Vrup
+3309_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/3309_inf_R1_flnc-5.bam	Vrip_X_Vrup
+3309_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/3309_inf_R2_flnc-5.bam	Vrip_X_Vrup
+99R_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/99R_con_R1_flnc-5.bam	Vber_X_Vrup
+99R_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/99R_con_R2_flnc-1.bam	Vber_X_Vrup
+99R_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/99R_con_R3_flnc-1.bam	Vber_X_Vrup
+99R_con_R4	/rhome/wcoll010/shared/pacbio/flnc_bams/99R_con_R4_flnc-5.bam	Vber_X_Vrup
+99R_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/99R_inf_R1_flnc-2.bam	Vber_X_Vrup
+99R_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/99R_inf_R2_flnc-3.bam	Vber_X_Vrup
+99R_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/99R_inf_R3_flnc-5.bam	Vber_X_Vrup
+sw_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/sw_con_R1_flnc-4.bam	Vrip_X_Vrup
+sw_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/sw_con_R2_flnc-5.bam	Vrip_X_Vrup
+sw_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/sw_con_R3_flnc-1.bam	Vrip_X_Vrup
+sw_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/sw_inf_R1_flnc-1.bam	Vrip_X_Vrup
+sw_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/sw_inf_R2_flnc-2.bam	Vrip_X_Vrup
+sw_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/sw_inf_R3_flnc-4.bam	Vrip_X_Vrup
+cab33_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/cab33_con_R1_flnc-5.bam	CabSauv08
+cab33_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/cab33_con_R2_flnc-1.bam	CabSauv08
+cab33_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/cab33_con_R3_flnc-2.bam	CabSauv08
+cab33_con_R4	/rhome/wcoll010/shared/pacbio/flnc_bams/cab33_con_R4_flnc-1.bam	CabSauv08
+cab33_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/cab33_inf_R1_flnc-4.bam	CabSauv08
+cab33_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/cab33_inf_R2_flnc-3.bam	CabSauv08
+cab33_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/cab33_inf_R3_flnc-4.bam	CabSauv08
+SO4_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/SO4_con_R1_flnc-3.bam	Vrip_X_Vber
+SO4_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/SO4_con_R2_flnc-4.bam	Vrip_X_Vber
+SO4_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/SO4_con_R3_flnc-3.bam	Vrip_X_Vber
+SO4_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/SO4_inf_R1_flnc-5.bam	Vrip_X_Vber
+SO4_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/SO4_inf_R2_flnc-2.bam	Vrip_X_Vber
+SO4_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/SO4_inf_R3_flnc-1.bam	Vrip_X_Vber
+1616_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_con_R1_flnc-2.bam	Vrip_X_Vace
+1616_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_con_R2_flnc-5.bam	Vrip_X_Vace
+1616_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_con_R3_flnc-1.bam	Vrip_X_Vace
+1616_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_inf_R1_flnc-3.bam	Vrip_X_Vace
+1616_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_inf_R2_flnc-4.bam	Vrip_X_Vace
+1616_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_inf_R3_flnc-2.bam	Vrip_X_Vace
+1616_inf_R4	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_inf_R4_flnc-3.bam	Vrip_X_Vace
+1616_inf_R5	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_inf_R5_flnc-4.bam	Vrip_X_Vace
+ripa_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/ripa_con_R1_flnc-5.bam	Vripa
+ripa_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/ripa_con_R2_flnc-1.bam	Vripa
+ripa_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/ripa_con_R3_flnc-5.bam	Vripa
+ripa_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/ripa_inf_R1_flnc-3.bam	Vripa
+ripa_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/ripa_inf_R2_flnc-3.bam	Vripa
+ripa_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/ripa_inf_R3_flnc-1.bam	Vripa
+5BB_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/5BB_con_R1_flnc-4.bam	Vrip_X_Vber
+5BB_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/5BB_con_R2_flnc-4.bam	Vrip_X_Vber
+5BB_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/5BB_con_R3_flnc-2.bam	Vrip_X_Vber
+5BB_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/5BB_inf_R1_flnc-5.bam	Vrip_X_Vber
+5BB_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/5BB_inf_R2_flnc-1.bam	Vrip_X_Vber
+101-14_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/101-14_con_R1_flnc-4.bam	Vrip_X_Vrup
+101-14_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/101-14_con_R2_flnc-3.bam	Vrip_X_Vrup
+101-14_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/101-14_con_R3_flnc-3.bam	Vrip_X_Vrup
+101-14_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/101-14_inf_R1_flnc-2.bam	Vrip_X_Vrup
+101-14_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/101-14_inf_R2_flnc-2.bam	Vrip_X_Vrup
+101-14_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/101-14_inf_R3_flnc-4.bam	Vrip_X_Vrup
+
+# save as /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/manifest_final.csv
+
+
+
+
+
+
+
+
+
+
+
+
+### run Oarfish quantification using bash wrapper script
+
+#!/bin/bash -l
+#SBATCH --job-name=oarfish_quant
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=80G
+#SBATCH --time=24:00:00
+#SBATCH --array=1-62%10
+#SBATCH -p epyc
+#SBATCH --output=logs/oarfish_quant_%A_%a.out
+#SBATCH --error=logs/oarfish_quant_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# ------------------------------------------------------------
+# Software
+# ------------------------------------------------------------
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate /rhome/wcoll010/bigdata_groenlab/conda_envs/oarfish_env
+
+echo "======================================================"
+echo "Oarfish executable:"
+which oarfish
+
+echo "Oarfish version:"
+oarfish --version || true
+echo "======================================================"
+
+# ------------------------------------------------------------
+# Paths
+# ------------------------------------------------------------
+
+BASE_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+MANIFEST="${BASE_DIR}/manifest_final.csv"
+ALIGN_DIR="${BASE_DIR}/transcriptome_alignments"
+QUANT_DIR="${BASE_DIR}/oarfish_quant_mm2"
+
+mkdir -p "$QUANT_DIR" "${BASE_DIR}/logs"
+
+# ------------------------------------------------------------
+# Read manifest row
+# ------------------------------------------------------------
+
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$MANIFEST")
+
+SAMPLE=$(printf '%s\n' "$LINE" | cut -f1)
+FLNC_BAM=$(printf '%s\n' "$LINE" | cut -f2)
+GENOME=$(printf '%s\n' "$LINE" | cut -f3)
+
+ALIGN_BAM="${ALIGN_DIR}/${SAMPLE}.transcriptome.bam"
+OUT_PREFIX="${QUANT_DIR}/${SAMPLE}"
+
+echo "======================================================"
+echo "Sample:           $SAMPLE"
+echo "Reference group:  $GENOME"
+echo "Alignment BAM:    $ALIGN_BAM"
+echo "Output prefix:    $OUT_PREFIX"
+echo "======================================================"
+
+# ------------------------------------------------------------
+# Safety checks
+# ------------------------------------------------------------
+
+if [[ -z "$SAMPLE" || -z "$GENOME" ]]; then
+    echo "ERROR: Empty manifest field on row ${SLURM_ARRAY_TASK_ID}"
+    exit 1
+fi
+
+if [[ ! -f "$ALIGN_BAM" ]]; then
+    echo "ERROR: Final minimap2 alignment BAM is missing:"
+    echo "$ALIGN_BAM"
+    echo
+    echo "Only completed .transcriptome.bam files are accepted."
+    echo "A .tmp BAM means the alignment has not completed successfully."
+    exit 1
+fi
+
+# Optional but useful BAM integrity check.
+if command -v samtools >/dev/null 2>&1; then
+    if ! samtools quickcheck "$ALIGN_BAM" 2>/dev/null; then
+        echo "ERROR: Alignment BAM failed samtools quickcheck:"
+        echo "$ALIGN_BAM"
+        exit 1
+    fi
+fi
+
+# ------------------------------------------------------------
+# Skip completed quantifications
+# ------------------------------------------------------------
+
+if [[ -s "${OUT_PREFIX}.quant" ]]; then
+    echo "Existing Oarfish .quant file found."
+    echo "Skipping $SAMPLE."
+    exit 0
+fi
+
+# ------------------------------------------------------------
+# Oarfish EM quantification
+# ------------------------------------------------------------
+
+echo "Starting Oarfish quantification..."
+
+/usr/bin/time -v oarfish \
+    --alignments "$ALIGN_BAM" \
+    --threads "${SLURM_CPUS_PER_TASK}" \
+    --filter-group no-filters \
+    --model-coverage \
+    --output "$OUT_PREFIX"
+
+# ------------------------------------------------------------
+# Verify output
+# ------------------------------------------------------------
+
+if [[ ! -s "${OUT_PREFIX}.quant" ]]; then
+    echo "ERROR: Oarfish did not produce a valid .quant file:"
+    echo "${OUT_PREFIX}.quant"
+    exit 1
+fi
+
+echo "======================================================"
+echo "Oarfish completed successfully"
+echo "Sample: $SAMPLE"
+echo "Output: ${OUT_PREFIX}.quant"
+echo "======================================================"
+
+ls -lh "${OUT_PREFIX}.quant"
+
+# save as oarfish_quant.sh
+sbatch --dependency=afterok:27914400 oarfish_quant.sh
+# Submitted batch job 27926571
+
+
+
+
+
+
+
+
+
+
+### construct genome-level count matrices 
+
+### write custom python file to process oarfish .quant files
+
+#!/usr/bin/env python3
+
+import pandas as pd
+from pathlib import Path
+from collections import defaultdict
+
+# ============================================================
+# Paths
+# ============================================================
+
+BASE = Path("/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2")
+
+MANIFEST = BASE / "manifest_final.csv"
+QUANT_DIR = BASE / "oarfish_quant_mm2"
+TX_DIR = BASE / "pooled_genomes"
+OUT_DIR = BASE / "oarfish_matrices"
+
+OUT_DIR.mkdir(exist_ok=True)
+
+
+# ============================================================
+# Read manifest
+# ============================================================
+
+groups = defaultdict(list)
+
+with open(MANIFEST) as fh:
+
+    for line_number, line in enumerate(fh, start=1):
+
+        line = line.rstrip("\n")
+
+        if not line:
+            continue
+
+        fields = line.split("\t")
+
+        if len(fields) < 3:
+            raise ValueError(
+                f"Manifest line {line_number} has fewer than 3 fields:\n"
+                f"{line}"
+            )
+
+        sample = fields[0]
+        genome = fields[2]
+
+        groups[genome].append(sample)
+
+
+print("Reference groups found:")
+
+for genome, samples in groups.items():
+    print(f"  {genome}: {len(samples)} samples")
+
+print()
+
+
+# ============================================================
+# Build one matrix per reference group
+# ============================================================
+
+for genome, samples in groups.items():
+
+    print("=" * 70)
+    print(f"Processing: {genome}")
+    print(f"Number of samples: {len(samples)}")
+    print("=" * 70)
+
+    transcriptome = TX_DIR / f"{genome}_unified.fasta"
+
+    if not transcriptome.exists():
+        raise FileNotFoundError(
+            f"Missing transcriptome: {transcriptome}"
+        )
+
+    # --------------------------------------------------------
+    # Number of expected transcripts
+    # --------------------------------------------------------
+
+    with open(transcriptome) as fh:
+        expected_transcripts = sum(
+            1 for line in fh if line.startswith(">")
+        )
+
+    print(
+        f"Expected transcript models: "
+        f"{expected_transcripts:,}"
+    )
+
+    matrix = None
+
+    # --------------------------------------------------------
+    # Process each biological sample
+    # --------------------------------------------------------
+
+    for sample in samples:
+
+        qfile = QUANT_DIR / f"{sample}.quant"
+
+        if not qfile.exists():
+            raise FileNotFoundError(
+                f"Missing Oarfish quant file: {qfile}"
+            )
+
+        print(f"  Reading {sample}")
+
+        df = pd.read_csv(
+            qfile,
+            sep="\t"
+        )
+
+        # ----------------------------------------------------
+        # Validate columns
+        # ----------------------------------------------------
+
+        expected_columns = {
+            "tname",
+            "len",
+            "num_reads"
+        }
+
+        if not expected_columns.issubset(df.columns):
+
+            raise ValueError(
+                f"Unexpected columns in {qfile}\n"
+                f"Observed: {list(df.columns)}"
+            )
+
+        # ----------------------------------------------------
+        # Validate number of transcripts
+        # ----------------------------------------------------
+
+        if len(df) != expected_transcripts:
+
+            raise ValueError(
+                f"{sample}: quant file contains "
+                f"{len(df):,} transcripts but "
+                f"{expected_transcripts:,} were expected."
+            )
+
+        # ----------------------------------------------------
+        # Convert full Oarfish transcript name to PB ID
+        #
+        # Example:
+        #
+        # PB.1.1|PB.1.1:8196-8839(-)|transcript/704352
+        #
+        # becomes:
+        #
+        # PB.1.1
+        # ----------------------------------------------------
+
+        df["isoform"] = (
+            df["tname"]
+            .str.split("|", regex=False)
+            .str[0]
+        )
+
+        # ----------------------------------------------------
+        # Ensure IDs are unique
+        # ----------------------------------------------------
+
+        duplicates = df["isoform"].duplicated()
+
+        if duplicates.any():
+
+            dup_ids = (
+                df.loc[duplicates, "isoform"]
+                .head(10)
+                .tolist()
+            )
+
+            raise ValueError(
+                f"Duplicate PB IDs in {qfile}: "
+                f"{dup_ids}"
+            )
+
+        # ----------------------------------------------------
+        # Verify abundance values
+        # ----------------------------------------------------
+
+        if df["num_reads"].isna().any():
+            raise ValueError(
+                f"NA abundance values found in {qfile}"
+            )
+
+        if (df["num_reads"] < 0).any():
+            raise ValueError(
+                f"Negative abundance values found in {qfile}"
+            )
+
+        # ----------------------------------------------------
+        # Keep abundance only
+        # ----------------------------------------------------
+
+        sample_df = df[
+            ["isoform", "num_reads"]
+        ].copy()
+
+        sample_df.rename(
+            columns={
+                "num_reads": sample
+            },
+            inplace=True
+        )
+
+        # ----------------------------------------------------
+        # Merge
+        # ----------------------------------------------------
+
+        if matrix is None:
+
+            matrix = sample_df
+
+        else:
+
+            matrix = matrix.merge(
+                sample_df,
+                on="isoform",
+                how="outer",
+                validate="one_to_one"
+            )
+
+    # --------------------------------------------------------
+    # Fill any absent transcript/sample values with zero
+    # --------------------------------------------------------
+
+    matrix[samples] = (
+        matrix[samples]
+        .fillna(0)
+    )
+
+    # --------------------------------------------------------
+    # Final matrix validation
+    # --------------------------------------------------------
+
+    if len(matrix) != expected_transcripts:
+
+        raise ValueError(
+            f"{genome}: final matrix contains "
+            f"{len(matrix):,} isoforms; expected "
+            f"{expected_transcripts:,}."
+        )
+
+    # --------------------------------------------------------
+    # Write
+    # --------------------------------------------------------
+
+    outfile = (
+        OUT_DIR /
+        f"{genome}_oarfish_counts.tsv"
+    )
+
+    matrix.to_csv(
+        outfile,
+        sep="\t",
+        index=False
+    )
+
+    print()
+    print(f"Output: {outfile}")
+    print(
+        f"Dimensions: "
+        f"{matrix.shape[0]:,} isoforms x "
+        f"{matrix.shape[1] - 1} samples"
+    )
+
+    # --------------------------------------------------------
+    # Some useful abundance diagnostics
+    # --------------------------------------------------------
+
+    total_by_sample = matrix[samples].sum()
+
+    print()
+    print("Estimated reads per sample:")
+
+    for sample, total in total_by_sample.items():
+
+        print(
+            f"  {sample:<25} "
+            f"{total:,.3f}"
+        )
+
+    print()
+
+
+print("=" * 70)
+print("All Oarfish abundance matrices completed successfully.")
+print("=" * 70)
+
+# save as merge_oarfish_counts.py
+
+
+
+
+## submit bash script to run merge_oarfish_counts.py
+
+#!/bin/bash -l
+#SBATCH --job-name=merge_oarfish
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=64G
+#SBATCH --time=12:00:00
+#SBATCH -p epyc
+#SBATCH --output=logs/merge_oarfish_%j.out
+#SBATCH --error=logs/merge_oarfish_%j.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+
+conda activate /rhome/wcoll010/bigdata_groenlab/conda_envs/sqanti3_env
+
+cd /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2
+
+echo "Python:"
+which python
+
+echo "Pandas:"
+python -c "import pandas as pd; print(pd.__version__)"
+
+python merge_oarfish_counts.py
+
+sbatch merge_oarfish_counts.sh
+# Submitted batch job 27979267
+# Submitted batch job 27979429
+
+
+
+
+
+
+
+
+### make 10 different genotype level isoform count/abundance matrices
+
+#!/usr/bin/env python3
+
+import pandas as pd
+from pathlib import Path
+from collections import defaultdict
+
+
+# ============================================================
+# Paths
+# ============================================================
+
+BASE = Path("/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2")
+
+MANIFEST = BASE / "manifest_final.csv"
+GENOME_MATRIX_DIR = BASE / "oarfish_matrices"
+OUT_DIR = BASE / "oarfish_matrices_by_genotype"
+
+OUT_DIR.mkdir(exist_ok=True)
+
+
+# ============================================================
+# Genotype names
+#
+# These are inferred from the biological SAMPLE names in
+# manifest_final.csv, not from the historical BAM filenames.
+# ============================================================
+
+GENOTYPES = [
+    "101-14",
+    "1103",
+    "1616",
+    "3309",
+    "5BB",
+    "99R",
+    "SO4",
+    "cab33",
+    "ripa",
+    "sw"
+]
+
+
+# ============================================================
+# Read manifest
+#
+# Store:
+# genotype -> reference genome
+# genotype -> sample names
+# ============================================================
+
+genotype_samples = defaultdict(list)
+genotype_genome = {}
+
+with open(MANIFEST) as fh:
+
+    for line_number, line in enumerate(fh, start=1):
+
+        line = line.rstrip("\n")
+
+        if not line:
+            continue
+
+        fields = line.split("\t")
+
+        if len(fields) < 3:
+            raise ValueError(
+                f"Manifest line {line_number} has fewer than 3 fields:\n"
+                f"{line}"
+            )
+
+        sample = fields[0]
+        genome = fields[2]
+
+        # ----------------------------------------------------
+        # Determine genotype from biological sample name
+        #
+        # Examples:
+        # 101-14_con_R1 -> 101-14
+        # cab33_inf_R2  -> cab33
+        # sw_con_R1     -> sw
+        # ----------------------------------------------------
+
+        genotype = sample.split("_")[0]
+
+        if genotype not in GENOTYPES:
+            raise ValueError(
+                f"Unexpected genotype inferred from sample "
+                f"{sample}: {genotype}"
+            )
+
+        genotype_samples[genotype].append(sample)
+
+        # Every genotype should map to only one transcriptome
+        if genotype in genotype_genome:
+
+            if genotype_genome[genotype] != genome:
+                raise ValueError(
+                    f"{genotype} maps to multiple genome groups:\n"
+                    f"{genotype_genome[genotype]} and {genome}"
+                )
+
+        else:
+            genotype_genome[genotype] = genome
+
+
+# ============================================================
+# Print summary
+# ============================================================
+
+print("Genotype/sample assignments:")
+print()
+
+for genotype in GENOTYPES:
+
+    samples = genotype_samples[genotype]
+    genome = genotype_genome.get(genotype)
+
+    print(
+        f"{genotype:<10} "
+        f"{genome:<15} "
+        f"{len(samples):>2} samples"
+    )
+
+print()
+
+
+# ============================================================
+# Make one count matrix per genotype
+# ============================================================
+
+for genotype in GENOTYPES:
+
+    samples = genotype_samples[genotype]
+    genome = genotype_genome[genotype]
+
+    genome_matrix_file = (
+        GENOME_MATRIX_DIR /
+        f"{genome}_oarfish_counts.tsv"
+    )
+
+    print("=" * 70)
+    print(f"Genotype: {genotype}")
+    print(f"Reference group: {genome}")
+    print(f"Genome-level matrix: {genome_matrix_file}")
+    print(f"Samples: {len(samples)}")
+    print("=" * 70)
+
+    if not genome_matrix_file.exists():
+        raise FileNotFoundError(
+            f"Missing genome-level matrix:\n"
+            f"{genome_matrix_file}"
+        )
+
+    # --------------------------------------------------------
+    # Read genome-level matrix
+    # --------------------------------------------------------
+
+    df = pd.read_csv(
+        genome_matrix_file,
+        sep="\t"
+    )
+
+    if "isoform" not in df.columns:
+        raise ValueError(
+            f"'isoform' column missing from {genome_matrix_file}"
+        )
+
+    # --------------------------------------------------------
+    # Check every sample exists in that genome matrix
+    # --------------------------------------------------------
+
+    missing_samples = [
+        sample
+        for sample in samples
+        if sample not in df.columns
+    ]
+
+    if missing_samples:
+        raise ValueError(
+            f"Missing sample columns for {genotype}:\n"
+            + "\n".join(missing_samples)
+        )
+
+    # --------------------------------------------------------
+    # Select isoform ID + genotype's sample columns
+    # --------------------------------------------------------
+
+    genotype_df = df[
+        ["isoform"] + samples
+    ].copy()
+
+    # --------------------------------------------------------
+    # Write genotype-specific matrix
+    # --------------------------------------------------------
+
+    outfile = (
+        OUT_DIR /
+        f"{genotype}_oarfish_counts.tsv"
+    )
+
+    genotype_df.to_csv(
+        outfile,
+        sep="\t",
+        index=False
+    )
+
+    print(f"Wrote: {outfile}")
+    print(
+        f"Dimensions: "
+        f"{genotype_df.shape[0]:,} isoforms x "
+        f"{genotype_df.shape[1] - 1} samples"
+    )
+
+    # --------------------------------------------------------
+    # Sample totals
+    # --------------------------------------------------------
+
+    totals = genotype_df[samples].sum()
+
+    print()
+    print("Estimated reads per sample:")
+
+    for sample, total in totals.items():
+        print(
+            f"  {sample:<25} "
+            f"{total:,.3f}"
+        )
+
+    print()
+
+
+print("=" * 70)
+print("All genotype-level matrices created successfully.")
+print("=" * 70)
+
+# save as make_genotype_matrices.py
+
+
+
+### submit shell script to execute .py file 
+
+#!/bin/bash -l
+#SBATCH --job-name=genotype_matrices
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=32G
+#SBATCH --time=04:00:00
+#SBATCH -p epyc
+#SBATCH --output=logs/genotype_matrices_%j.out
+#SBATCH --error=logs/genotype_matrices_%j.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+
+conda activate /rhome/wcoll010/bigdata_groenlab/conda_envs/sqanti3_env
+
+cd /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2
+
+echo "Python:"
+which python
+
+echo "Pandas:"
+python -c "import pandas as pd; print(pd.__version__)"
+
+python make_genotype_matrices.py
+
+# save as make_genotype_matrices.sh
+# Submitted batch job 27979496
+
+
+
+
+
+
+
+
+
+
+
+
+
