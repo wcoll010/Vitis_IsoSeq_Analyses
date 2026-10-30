@@ -1,0 +1,1040 @@
+### The initial data pre-processing for Iso-seq data (lima (Remove cDNA primers); isoseq refine (Remove polyA tail and artificial concatemers)) \
+### was performed at the UC Davis DNA Technologies and Expression Analysis Core sequencing where library sequencing was performed
+
+### The reference genomes (.fasta) and genome annotation files (.gff3) used here are available online at: https://grapegenomics.com/
+### Grapegenomics.com: a web portal with genomic data and analysis tools for wild and cultivated grapevines, Cochetel Noé, Cantu Dario, Zenodo (2024) https://doi.org/10.5281/zenodo.10570120
+
+### The software and workflow followed here is described online at: https://isoseq.how/ and https://github.com/conesalab/SQANTI3
+
+
+### Steps included:
+### create haplotype-1-only reference genome 
+### assemble and filter reference transcriptome/isoform catalog
+
+
+
+
+### First, write manifest file to read in all full-length non-chimeric (flnc) .bam files 
+
+1103_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/1103_con_R1_flnc-5.bam	Vber_X_Vrup
+1103_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/1103_con_R2_flnc-1.bam	Vber_X_Vrup
+1103_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/1103_con_R3_flnc-3.bam	Vber_X_Vrup
+1103_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/1103_inf_R1_flnc-4.bam	Vber_X_Vrup
+1103_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/1103_inf_R2_flnc-2.bam	Vber_X_Vrup
+1103_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/1103_inf_R3_flnc-2.bam	Vber_X_Vrup
+3309_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/3309_con_R1_flnc-2.bam	Vrip_X_Vrup
+3309_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/3309_con_R2_flnc-4.bam	Vrip_X_Vrup
+3309_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/3309_con_R3_flnc-3.bam	Vrip_X_Vrup
+3309_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/3309_inf_R1_flnc-5.bam	Vrip_X_Vrup
+3309_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/3309_inf_R2_flnc-5.bam	Vrip_X_Vrup
+99R_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/99R_con_R1_flnc-5.bam	Vber_X_Vrup
+99R_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/99R_con_R2_flnc-1.bam	Vber_X_Vrup
+99R_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/99R_con_R3_flnc-1.bam	Vber_X_Vrup
+99R_con_R4	/rhome/wcoll010/shared/pacbio/flnc_bams/99R_con_R4_flnc-5.bam	Vber_X_Vrup
+99R_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/99R_inf_R1_flnc-2.bam	Vber_X_Vrup
+99R_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/99R_inf_R2_flnc-3.bam	Vber_X_Vrup
+99R_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/99R_inf_R3_flnc-5.bam	Vber_X_Vrup
+sw_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/sw_con_R1_flnc-4.bam	Vrip_X_Vrup
+sw_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/sw_con_R2_flnc-5.bam	Vrip_X_Vrup
+sw_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/sw_con_R3_flnc-1.bam	Vrip_X_Vrup
+sw_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/sw_inf_R1_flnc-1.bam	Vrip_X_Vrup
+sw_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/sw_inf_R2_flnc-2.bam	Vrip_X_Vrup
+sw_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/sw_inf_R3_flnc-4.bam	Vrip_X_Vrup
+cab33_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/cab33_con_R1_flnc-5.bam	CabSauv08
+cab33_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/cab33_con_R2_flnc-1.bam	CabSauv08
+cab33_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/cab33_con_R3_flnc-2.bam	CabSauv08
+cab33_con_R4	/rhome/wcoll010/shared/pacbio/flnc_bams/cab33_con_R4_flnc-1.bam	CabSauv08
+cab33_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/cab33_inf_R1_flnc-4.bam	CabSauv08
+cab33_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/cab33_inf_R2_flnc-3.bam	CabSauv08
+cab33_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/cab33_inf_R3_flnc-4.bam	CabSauv08
+SO4_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/SO4_con_R1_flnc-3.bam	Vrip_X_Vber
+SO4_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/SO4_con_R2_flnc-4.bam	Vrip_X_Vber
+SO4_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/SO4_con_R3_flnc-3.bam	Vrip_X_Vber
+SO4_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/SO4_inf_R1_flnc-5.bam	Vrip_X_Vber
+SO4_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/SO4_inf_R2_flnc-2.bam	Vrip_X_Vber
+SO4_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/SO4_inf_R3_flnc-1.bam	Vrip_X_Vber
+1616_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_con_R1_flnc-2.bam	Vrip_X_Vace
+1616_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_con_R2_flnc-5.bam	Vrip_X_Vace
+1616_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_con_R3_flnc-1.bam	Vrip_X_Vace
+1616_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_inf_R1_flnc-3.bam	Vrip_X_Vace
+1616_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_inf_R2_flnc-4.bam	Vrip_X_Vace
+1616_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_inf_R3_flnc-2.bam	Vrip_X_Vace
+1616_inf_R4	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_inf_R4_flnc-3.bam	Vrip_X_Vace
+1616_inf_R5	/rhome/wcoll010/shared/pacbio/flnc_bams/1616_inf_R5_flnc-4.bam	Vrip_X_Vace
+ripa_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/ripa_con_R1_flnc-5.bam	Vripa
+ripa_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/ripa_con_R2_flnc-1.bam	Vripa
+ripa_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/ripa_con_R3_flnc-5.bam	Vripa
+ripa_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/ripa_inf_R1_flnc-3.bam	Vripa
+ripa_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/ripa_inf_R2_flnc-3.bam	Vripa
+ripa_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/ripa_inf_R3_flnc-1.bam	Vripa
+5BB_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/5BB_con_R1_flnc-4.bam	Vrip_X_Vber
+5BB_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/5BB_con_R2_flnc-4.bam	Vrip_X_Vber
+5BB_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/5BB_con_R3_flnc-2.bam	Vrip_X_Vber
+5BB_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/5BB_inf_R1_flnc-5.bam	Vrip_X_Vber
+5BB_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/5BB_inf_R2_flnc-1.bam	Vrip_X_Vber
+101-14_con_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/101-14_con_R1_flnc-4.bam	Vrip_X_Vrup
+101-14_con_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/101-14_con_R2_flnc-3.bam	Vrip_X_Vrup
+101-14_con_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/101-14_con_R3_flnc-3.bam	Vrip_X_Vrup
+101-14_inf_R1	/rhome/wcoll010/shared/pacbio/flnc_bams/101-14_inf_R1_flnc-2.bam	Vrip_X_Vrup
+101-14_inf_R2	/rhome/wcoll010/shared/pacbio/flnc_bams/101-14_inf_R2_flnc-2.bam	Vrip_X_Vrup
+101-14_inf_R3	/rhome/wcoll010/shared/pacbio/flnc_bams/101-14_inf_R3_flnc-4.bam	Vrip_X_Vrup
+
+# save as /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/manifest_final.csv
+
+
+
+
+### extract haplotype 1 from each parental species genome 
+
+
+module load samtools
+
+GENOME_DIR="/rhome/wcoll010/shared/pacbio/genomes"
+
+# 1. Vitis rupestris
+cd ${GENOME_DIR}/V_rupestris
+grep "^>" VITVrpB38_v1.0.fasta | grep -i "hap1" | tr -d ">" | awk '{print $1}' > hap1_headers.txt
+samtools faidx VITVrpB38_v1.0.fasta -r hap1_headers.txt > VITVrpB38_hap1.fasta
+awk '$1 ~ /hap1/ || $1 ~ /^#/' VITVrpB38_v1.0.gff3 > VITVrpB38_hap1.gff3
+
+# 2. Vitis berlandieri
+cd ${GENOME_DIR}/V_berlandieri
+grep "^>" VITVbe9031_v1.0.fasta | grep -i "hap1" | tr -d ">" | awk '{print $1}' > hap1_headers.txt
+samtools faidx VITVbe9031_v1.0.fasta -r hap1_headers.txt > VITVbe9031_hap1.fasta
+awk '$1 ~ /hap1/ || $1 ~ /^#/' VITVbe9031_v1.0.gff3 > VITVbe9031_hap1.gff3
+
+# 3. Vitis riparia (Vripa)
+cd ${GENOME_DIR}/Vripa
+grep "^>" VITVri588271_v1.0.fasta | grep -i "hap1" | tr -d ">" | awk '{print $1}' > hap1_headers.txt
+samtools faidx VITVri588271_v1.0.fasta -r hap1_headers.txt > VITVri588271_hap1.fasta
+awk '$1 ~ /hap1/ || $1 ~ /^#/' VITVri588271_v1.0.gff3 > VITVri588271_hap1.gff3
+
+# 4. Vitis acerifolia
+cd ${GENOME_DIR}/V_acerifolia
+grep "^>" VITVac9018_v1.0.fasta | grep -i "hap1" | tr -d ">" | awk '{print $1}' > hap1_headers.txt
+samtools faidx VITVac9018_v1.0.fasta -r hap1_headers.txt > VITVac9018_hap1.fasta
+awk '$1 ~ /hap1/ || $1 ~ /^#/' VITVac9018_v1.0.gff3 > VITVac9018_hap1.gff3
+
+
+
+
+
+### create new hybrid/concatenated reference genomes using the extracted haplotype 1
+
+GENOME_DIR="/rhome/wcoll010/shared/pacbio/genomes"
+
+# 1. Vber_X_Vrup (for 99R, 1103)
+mkdir -p ${GENOME_DIR}/Vber_X_Vrup
+cat ${GENOME_DIR}/V_berlandieri/VITVbe9031_hap1.fasta \
+    ${GENOME_DIR}/V_rupestris/VITVrpB38_hap1.fasta > ${GENOME_DIR}/Vber_X_Vrup/Vber_X_Vrup_genome.fasta
+
+echo "##gff-version 3" > ${GENOME_DIR}/Vber_X_Vrup/Vber_X_Vrup.gff3
+grep -v "^#" ${GENOME_DIR}/V_berlandieri/VITVbe9031_hap1.gff3 >> ${GENOME_DIR}/Vber_X_Vrup/Vber_X_Vrup.gff3
+grep -v "^#" ${GENOME_DIR}/V_rupestris/VITVrpB38_hap1.gff3 >> ${GENOME_DIR}/Vber_X_Vrup/Vber_X_Vrup.gff3
+
+
+# 2. Vrip_X_Vber (for 5BB, SO4)
+mkdir -p ${GENOME_DIR}/Vrip_X_Vber
+cat ${GENOME_DIR}/Vripa/VITVri588271_hap1.fasta \
+    ${GENOME_DIR}/V_berlandieri/VITVbe9031_hap1.fasta > ${GENOME_DIR}/Vrip_X_Vber/Vrip_X_Vber_genome.fasta
+
+echo "##gff-version 3" > ${GENOME_DIR}/Vrip_X_Vber/Vrip_X_Vber.gff3
+grep -v "^#" ${GENOME_DIR}/Vripa/VITVri588271_hap1.gff3 >> ${GENOME_DIR}/Vrip_X_Vber/Vrip_X_Vber.gff3
+grep -v "^#" ${GENOME_DIR}/V_berlandieri/VITVbe9031_hap1.gff3 >> ${GENOME_DIR}/Vrip_X_Vber/Vrip_X_Vber.gff3
+
+
+# 3. Vrip_X_Vrup (for sw, 3309, 101-14)
+mkdir -p ${GENOME_DIR}/Vrip_X_Vrup
+cat ${GENOME_DIR}/Vripa/VITVri588271_hap1.fasta \
+    ${GENOME_DIR}/V_rupestris/VITVrpB38_hap1.fasta > ${GENOME_DIR}/Vrip_X_Vrup/Vrip_X_Vrup_genome.fasta
+
+echo "##gff-version 3" > ${GENOME_DIR}/Vrip_X_Vrup/Vrip_X_Vrup.gff3
+grep -v "^#" ${GENOME_DIR}/Vripa/VITVri588271_hap1.gff3 >> ${GENOME_DIR}/Vrip_X_Vrup/Vrip_X_Vrup.gff3
+grep -v "^#" ${GENOME_DIR}/V_rupestris/VITVrpB38_hap1.gff3 >> ${GENOME_DIR}/Vrip_X_Vrup/Vrip_X_Vrup.gff3
+
+
+# 4. Vrip_X_Vace (for 1616)
+mkdir -p ${GENOME_DIR}/Vrip_X_Vace
+cat ${GENOME_DIR}/Vripa/VITVri588271_hap1.fasta \
+    ${GENOME_DIR}/V_acerifolia/VITVac9018_hap1.fasta > ${GENOME_DIR}/Vrip_X_Vace/Vrip_X_Vace_genome.fasta
+
+echo "##gff-version 3" > ${GENOME_DIR}/Vrip_X_Vace/Vrip_X_Vace.gff3
+grep -v "^#" ${GENOME_DIR}/Vripa/VITVri588271_hap1.gff3 >> ${GENOME_DIR}/Vrip_X_Vace/Vrip_X_Vace.gff3
+grep -v "^#" ${GENOME_DIR}/V_acerifolia/VITVac9018_hap1.gff3 >> ${GENOME_DIR}/Vrip_X_Vace/Vrip_X_Vace.gff3
+
+
+
+
+
+### index the new hybrid reference genomes 
+
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate "$HOME/.conda/envs/isoseq_run_env"
+
+GENOME_DIR="/rhome/wcoll010/shared/pacbio/genomes"
+
+pbmm2 index ${GENOME_DIR}/Vber_X_Vrup/Vber_X_Vrup_genome.fasta ${GENOME_DIR}/Vber_X_Vrup/Vber_X_Vrup_genome.mmi
+pbmm2 index ${GENOME_DIR}/Vrip_X_Vber/Vrip_X_Vber_genome.fasta ${GENOME_DIR}/Vrip_X_Vber/Vrip_X_Vber_genome.mmi
+pbmm2 index ${GENOME_DIR}/Vrip_X_Vrup/Vrip_X_Vrup_genome.fasta ${GENOME_DIR}/Vrip_X_Vrup/Vrip_X_Vrup_genome.mmi
+pbmm2 index ${GENOME_DIR}/Vrip_X_Vace/Vrip_X_Vace_genome.fasta ${GENOME_DIR}/Vrip_X_Vace/Vrip_X_Vace_genome.mmi
+
+
+
+
+### run some QC checks to make sure the new reference genomes are correct
+
+
+GENOME_DIR="/rhome/wcoll010/shared/pacbio/genomes"
+HYBRIDS=("Vber_X_Vrup" "Vrip_X_Vber" "Vrip_X_Vrup" "Vrip_X_Vace")
+
+for HYB in "${HYBRIDS[@]}"; do
+    echo "=================================================="
+    echo "QC REPORT FOR: $HYB"
+    echo "=================================================="
+    
+    FASTA="${GENOME_DIR}/${HYB}/${HYB}_genome.fasta"
+    GFF="${GENOME_DIR}/${HYB}/${HYB}.gff3"
+    
+    # 1. Total chromosomes in FASTA
+    FASTA_SEQS=$(grep -c "^>" "$FASTA")
+    echo "[1] Total FASTA sequences (Expected: 38): $FASTA_SEQS"
+    
+    # 2. Check for accidental hap2 presence in FASTA headers
+    HAP2_FASTA=$(grep "^>" "$FASTA" | grep -ci "hap2" || true)
+    echo "[2] Hap2 headers in FASTA (Expected: 0): $HAP2_FASTA"
+    
+    # 3. Check for accidental hap2 presence in GFF3
+    HAP2_GFF=$(grep -v "^#" "$GFF" | awk '{print $1}' | grep -ci "hap2" || true)
+    echo "[3] Hap2 features in GFF3 (Expected: 0): $HAP2_GFF"
+    
+    # 4. Check FASTA vs. GFF3 chromosome header congruence
+    grep "^>" "$FASTA" | tr -d ">" | awk '{print $1}' | sort -u > /tmp/${HYB}_fasta_ids.txt
+    grep -v "^#" "$GFF" | awk '{print $1}' | sort -u > /tmp/${HYB}_gff_ids.txt
+    DIFF_COUNT=$(comm -3 /tmp/${HYB}_fasta_ids.txt /tmp/${HYB}_gff_ids.txt | wc -l)
+    echo "[4] FASTA vs GFF3 ID mismatches (Expected: 0): $DIFF_COUNT"
+    
+    # 5. Total annotated gene count
+    GENES=$(awk '$3 == "gene"' "$GFF" | wc -l)
+    echo "[5] Total annotated genes (Expected: ~60,000-66,000): $GENES"
+    echo ""
+done
+
+
+
+
+
+
+
+
+
+
+### make the gtf files using AGAT : need to convert the gff3 to .gtf for sqanti3
+### also need to run samtools index for the reference genomes 
+
+#!/bin/bash -l
+#SBATCH --job-name=index_agat
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=80G
+#SBATCH --time=012:00:00
+#SBATCH --array=0-3
+#SBATCH --output=logs/index_agat_%A_%a.out
+#SBATCH --error=logs/index_agat_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# 1. Genome Paths & Target Definition
+GENOMES=("Vber_X_Vrup" "Vrip_X_Vrup" "Vrip_X_Vber" "Vrip_X_Vace")
+REF_BASE="/rhome/wcoll010/shared/pacbio/genomes"
+
+G_DIR="${GENOMES[$SLURM_ARRAY_TASK_ID]}"
+GENOME_PATH="${REF_BASE}/${G_DIR}"
+FASTA="${GENOME_PATH}/${G_DIR}_genome.fasta"
+
+mkdir -p logs
+
+echo "=================================================="
+echo "Task ID: $SLURM_ARRAY_TASK_ID"
+echo "Processing Hybrid Genome: $G_DIR"
+echo "=================================================="
+
+# 2. Step A: Generate .fai Index with samtools
+echo "[Step 1/2] Indexing FASTA with samtools faidx..."
+module load samtools
+samtools faidx "$FASTA"
+echo "Index created: ${FASTA}.fai"
+
+# 3. Step B: Setup AGAT Environment & Convert GFF3 to GTF
+echo "[Step 2/2] Converting GFF3 to GTF with AGAT..."
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate /rhome/wcoll010/bigdata_groenlab/conda_envs/agat_env
+
+GFF=$(ls "${GENOME_PATH}"/*.gff3 | head -n 1)
+OUT_GTF="${GENOME_PATH}/genome_reference.gtf"
+
+agat_convert_sp_gff2gtf.pl --gff "$GFF" -o "$OUT_GTF"
+
+echo "=================================================="
+echo "Successfully completed indexing and GTF generation for $G_DIR!"
+echo "=================================================="
+
+
+# save as run_index_and_agat.sh
+sbatch run_index_and_agat.sh
+
+# Submitted batch job 27753757
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### split up manifest file into 2 to improve compute efficiency
+
+cd /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2
+
+# Split manifest_final.csv into two equal 32-sample batches
+head -n 32 manifest_final.csv > manifest_part1.tsv
+tail -n 32 manifest_final.csv > manifest_part2.tsv
+
+# Verify line counts (both should return 32)
+wc -l manifest_part1.tsv manifest_part2.tsv
+
+# Create a clean output directory and log folders
+mkdir -p aligned_diploid_samples logs
+
+
+
+
+
+
+
+### Run pbmm2 genome alignment using bash wrapper script
+
+#!/bin/bash -l
+#SBATCH --job-name=pbmm2_p2
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=100G
+#SBATCH --time=48:00:00
+#SBATCH --array=1-32%8
+#SBATCH -p epyc
+#SBATCH --output=logs/align_p2_%A_%a.out
+#SBATCH --error=logs/align_p2_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+MANIFEST="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/manifest_part2.tsv"
+REF_BASE="/rhome/wcoll010/shared/pacbio/genomes"
+OUT_BASE="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/aligned_diploid_samples"
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate "$HOME/.conda/envs/isoseq_run_env"
+
+# 1. Parse sample information from manifest
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$MANIFEST")
+SAMPLE=$(echo "$LINE" | cut -f1)
+INPUT_BAM=$(echo "$LINE" | cut -f2)
+GENOME_FOLDER=$(echo "$LINE" | cut -f3)
+
+# 2. Set sample output directory and target BAM
+SAMPLE_OUT_DIR="${OUT_BASE}/${SAMPLE}"
+mkdir -p "$SAMPLE_OUT_DIR"
+OUT_BAM="${SAMPLE_OUT_DIR}/${SAMPLE}_mapped.bam"
+
+# 3. Locate the .mmi index file
+REF=$(ls ${REF_BASE}/${GENOME_FOLDER}/*.mmi | head -n 1)
+
+echo "=== Processing Sample: $SAMPLE (Task ${SLURM_ARRAY_TASK_ID}) ==="
+echo "Input BAM:  $INPUT_BAM"
+echo "Reference:  $REF"
+echo "Output BAM: $OUT_BAM"
+
+if [[ ! -f "$INPUT_BAM" ]]; then
+    echo "ERROR: Input file $INPUT_BAM does not exist!"
+    exit 1
+fi
+
+# 4. Run pbmm2 alignment
+/usr/bin/time -v pbmm2 align "$REF" "$INPUT_BAM" "$OUT_BAM" \
+    --preset ISOSEQ \
+    --sort \
+    --num-threads "${SLURM_CPUS_PER_TASK}" \
+    --log-level INFO
+
+echo "Alignment complete for $SAMPLE -> $OUT_BAM"
+
+
+
+
+
+
+
+
+
+# submit second array
+
+#!/bin/bash -l
+#SBATCH --job-name=pbmm2_p2
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=100G
+#SBATCH --time=48:00:00
+#SBATCH --array=1-32%8
+#SBATCH -p epyc
+#SBATCH --output=logs/align_p2_%A_%a.out
+#SBATCH --error=logs/align_p2_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+MANIFEST="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/manifest_part2.tsv"
+REF_BASE="/rhome/wcoll010/shared/pacbio/genomes"
+OUT_BASE="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/aligned_diploid_samples"
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate "$HOME/.conda/envs/isoseq_run_env"
+
+# 1. Parse sample information from manifest
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$MANIFEST")
+SAMPLE=$(echo "$LINE" | cut -f1)
+INPUT_BAM=$(echo "$LINE" | cut -f2)
+GENOME_FOLDER=$(echo "$LINE" | cut -f3)
+
+# 2. Set sample output directory and target BAM
+SAMPLE_OUT_DIR="${OUT_BASE}/${SAMPLE}"
+mkdir -p "$SAMPLE_OUT_DIR"
+OUT_BAM="${SAMPLE_OUT_DIR}/${SAMPLE}_mapped.bam"
+
+# 3. Locate the .mmi index file
+REF=$(ls ${REF_BASE}/${GENOME_FOLDER}/*.mmi | head -n 1)
+
+echo "=== Processing Sample: $SAMPLE (Task ${SLURM_ARRAY_TASK_ID}) ==="
+echo "Input BAM:  $INPUT_BAM"
+echo "Reference:  $REF"
+echo "Output BAM: $OUT_BAM"
+
+if [[ ! -f "$INPUT_BAM" ]]; then
+    echo "ERROR: Input file $INPUT_BAM does not exist!"
+    exit 1
+fi
+
+# 4. Run pbmm2 alignment
+/usr/bin/time -v pbmm2 align "$REF" "$INPUT_BAM" "$OUT_BAM" \
+    --preset ISOSEQ \
+    --sort \
+    --num-threads "${SLURM_CPUS_PER_TASK}" \
+    --log-level INFO
+
+echo "Alignment complete for $SAMPLE -> $OUT_BAM"
+
+
+
+
+
+
+
+
+
+
+### Generate summary file with alignment statistics
+
+#!/bin/bash -l
+#SBATCH --job-name=align_qc
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=32G
+#SBATCH --time=02:00:00
+#SBATCH --output=logs/align_qc_%j.out
+#SBATCH --error=logs/align_qc_%j.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# 1. Environment Setup
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate "$HOME/.conda/envs/isoseq_run_env"
+
+BASE_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+MANIFEST="${BASE_DIR}/manifest_final.csv"
+BAM_DIR="${BASE_DIR}/aligned_diploid_samples"
+OUT_CSV="${BASE_DIR}/alignment_qc_summary.csv"
+
+mkdir -p "${BASE_DIR}/logs"
+
+echo "=================================================="
+echo "Generating Alignment QC Summary"
+echo "Manifest: $MANIFEST"
+echo "Output:   $OUT_CSV"
+echo "=================================================="
+
+# 2. Write CSV Header
+echo "sample_id,reference_genome,total_reads,mapped_reads,pct_mapped,unmapped_reads,mapq_0_reads,pct_mapq_0,mapq_1_29_reads,mapq_ge30_reads,pct_mapq_ge30" > "$OUT_CSV"
+
+# 3. Process Each Sample
+while IFS=$'\t' read -r SAMPLE FLNC_PATH GENOME; do
+    # Skip empty lines or headers if present
+    [[ -z "$SAMPLE" || "$SAMPLE" == "Genotype" || "$SAMPLE" == "sample_id" ]] && continue
+    
+    BAM_PATH="${BAM_DIR}/${SAMPLE}/${SAMPLE}_mapped.bam"
+    
+    if [[ ! -f "$BAM_PATH" ]]; then
+        echo "WARNING: ${BAM_PATH} not found. Recording as missing."
+        echo "${SAMPLE},${GENOME},NA,NA,NA,NA,NA,NA,NA,NA,NA" >> "$OUT_CSV"
+        continue
+    fi
+    
+    echo "Processing $SAMPLE..."
+    
+    # Extract comprehensive mapping and MAPQ metrics in a single streaming pass
+    STATS=$(samtools view -@ 1 "$BAM_PATH" | awk '
+    BEGIN {
+        total = 0;
+        mapped = 0;
+        unmapped = 0;
+        q0 = 0;
+        q_low = 0;
+        q_high = 0;
+    }
+    {
+        total++;
+        if ($3 == "*") {
+            unmapped++;
+        } else {
+            mapped++;
+            if ($5 == 0) {
+                q0++;
+            } else if ($5 < 30) {
+                q_low++;
+            } else {
+                q_high++;
+            }
+        }
+    }
+    END {
+        pct_map   = (total > 0)  ? (mapped / total * 100) : 0;
+        pct_q0    = (mapped > 0) ? (q0 / mapped * 100)    : 0;
+        pct_qhigh = (mapped > 0) ? (q_high / mapped * 100): 0;
+        printf "%d,%d,%.2f,%d,%d,%.2f,%d,%d,%.2f", total, mapped, pct_map, unmapped, q0, pct_q0, q_low, q_high, pct_qhigh;
+    }')
+    
+    echo "${SAMPLE},${GENOME},${STATS}" >> "$OUT_CSV"
+
+done < "$MANIFEST"
+
+echo "=================================================="
+echo "QC Complete. Results written to: $OUT_CSV"
+echo "=================================================="
+
+# saved as alignment_qc.sh
+
+sbatch --dependency=afterok:27752156:27752157 alignment_qc.sh
+
+# Submitted batch job 27753148
+
+
+
+
+
+
+
+
+
+
+### collapse aligned data to make a master trascriptome for each hybrid reference transcriptome/catalog
+### perform via isoseq collapse command
+
+
+#!/bin/bash -l
+#SBATCH --job-name=pool_collapse
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=80G
+#SBATCH --time=12:00:00
+#SBATCH --array=1-6
+#SBATCH -p epyc
+#SBATCH --output=logs/pool_collapse_%A_%a.out
+#SBATCH --error=logs/pool_collapse_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# 1. Environment Setup
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+conda activate "$HOME/.conda/envs/isoseq_run_env"
+
+BASE_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+IN_DIR="${BASE_DIR}/aligned_diploid_samples"
+OUT_DIR="${BASE_DIR}/master_transcriptomes"
+mkdir -p "$OUT_DIR" logs
+
+# 2. Define the 6 Backgrounds and Matching Genotype Prefixes
+GROUPS=("Vrip_X_Vrup" "Vber_X_Vrup" "Vrip_X_Vber" "Vrip_X_Vace" "CabSauv08" "Vripa")
+GENOS=("sw 3309 101-14" "99R 1103" "5BB SO4" "1616" "cab33" "ripa")
+
+# Map SLURM_ARRAY_TASK_ID (1-6) to 0-indexed bash arrays
+INDEX=$((SLURM_ARRAY_TASK_ID - 1))
+GROUP="${GROUPS[$INDEX]}"
+GENO_LIST="${GENOS[$INDEX]}"
+
+echo "=========================================="
+echo "Task ID: $SLURM_ARRAY_TASK_ID"
+echo "Processing Group: $GROUP"
+echo "Target Genotypes: $GENO_LIST"
+echo "=========================================="
+
+# 3. Gather Mapped BAMs for this Specific Group
+BAMS=()
+for GENO in $GENO_LIST; do
+    for BAM in ${IN_DIR}/${GENO}_*/*_mapped.bam; do
+        if [[ -f "$BAM" ]]; then
+            BAMS+=("$BAM")
+        fi
+    done
+done
+
+echo "Found ${#BAMS[@]} BAM files for $GROUP."
+
+if [[ ${#BAMS[@]} -eq 0 ]]; then
+    echo "ERROR: No BAM files found matching prefixes: $GENO_LIST"
+    exit 1
+fi
+
+POOLED_BAM="${OUT_DIR}/${GROUP}_pooled.sorted.bam"
+
+# 4. Merge and Sort
+echo "Merging and sorting ${#BAMS[@]} BAMs for $GROUP..."
+samtools merge -@ 4 - "${BAMS[@]}" | \
+samtools sort -@ 4 -m 12G -o "$POOLED_BAM"
+samtools index -@ 4 "$POOLED_BAM"
+
+# 5. Collapse Redundant Isoforms
+echo "Running isoseq collapse for $GROUP..."
+isoseq collapse --do-not-collapse-extra-5exons \
+    --num-threads "${SLURM_CPUS_PER_TASK}" \
+    "$POOLED_BAM" \
+    "${OUT_DIR}/${GROUP}_master.gff"
+
+echo "Successfully built Master Transcriptome for $GROUP!"
+
+
+# save file as pool_collapse_array.sh
+
+
+sbatch --dependency=afterok:27752156:27752157 pool_collapse_array.sh
+
+# Submitted batch job 27752932
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### running sqanti3 QC and filtering 
+
+
+#!/bin/bash -l
+#SBATCH --job-name=sqanti_qc
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=160G
+#SBATCH --time=72:00:00
+#SBATCH -p epyc
+#SBATCH --array=0-5
+#SBATCH --output=logs/sqanti_qc_%A_%a.out
+#SBATCH --error=logs/sqanti_qc_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+# ============================================================
+# 1. Environment
+# ============================================================
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+
+conda activate \
+/rhome/wcoll010/bigdata_groenlab/conda_envs/sqanti3_env
+
+
+# ============================================================
+# 2. SQANTI3 paths
+# ============================================================
+
+SOFTWARE_DIR="/rhome/wcoll010/bigdata_groenlab/iso_seq"
+SQANTI_TOOL_DIR="${SOFTWARE_DIR}/SQANTI3"
+SQANTI_PY="${SQANTI_TOOL_DIR}/sqanti3_qc.py"
+
+export PATH="${PATH}:${SQANTI_TOOL_DIR}/utilities"
+
+
+# ============================================================
+# 3. Data paths
+# ============================================================
+
+BASE_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+POOLED_DIR="${BASE_DIR}/pooled_genomes"
+REF_BASE="/rhome/wcoll010/shared/pacbio/genomes"
+SQANTI_OUT="${BASE_DIR}/sqanti_results"
+
+mkdir -p "$SQANTI_OUT" "${BASE_DIR}/logs"
+
+
+# ============================================================
+# 4. Six unified reference groups
+# ============================================================
+
+GENOMES=(
+    "Vrip_X_Vrup"
+    "Vber_X_Vrup"
+    "Vrip_X_Vber"
+    "Vrip_X_Vace"
+    "CabSauv08"
+    "Vripa"
+)
+
+G_DIR="${GENOMES[$SLURM_ARRAY_TASK_ID]}"
+
+
+# ============================================================
+# 5. Inputs
+# ============================================================
+
+ISOFORM_GFF="${POOLED_DIR}/${G_DIR}_unified.gff"
+
+REF_DIR="${REF_BASE}/${G_DIR}"
+
+REF_GTF="${REF_DIR}/genome_reference.gtf"
+
+
+# ------------------------------------------------------------
+# Explicit reference FASTA mapping
+# ------------------------------------------------------------
+
+case "$G_DIR" in
+
+    Vrip_X_Vrup)
+        REF_FASTA="${REF_DIR}/Vrip_X_Vrup_genome.fasta"
+        ;;
+
+    Vber_X_Vrup)
+        REF_FASTA="${REF_DIR}/Vber_X_Vrup_genome.fasta"
+        ;;
+
+    Vrip_X_Vber)
+        REF_FASTA="${REF_DIR}/Vrip_X_Vber_genome.fasta"
+        ;;
+
+    Vrip_X_Vace)
+        REF_FASTA="${REF_DIR}/Vrip_X_Vace_genome.fasta"
+        ;;
+
+    CabSauv08)
+        REF_FASTA="${REF_DIR}/VITVvi_vCabSauv08_v2.0.pseudomolecules.fasta"
+        ;;
+
+    Vripa)
+        REF_FASTA="${REF_DIR}/VITVri588271_v1.0.fasta"
+        ;;
+
+    *)
+        echo "ERROR: Unknown genome group: $G_DIR"
+        exit 1
+        ;;
+esac
+
+
+# ============================================================
+# 6. Output
+# ============================================================
+
+OUT_DIR="${SQANTI_OUT}/${G_DIR}_sqanti"
+
+mkdir -p "$OUT_DIR"
+
+
+echo "======================================================"
+echo "SQANTI3 QC"
+echo "======================================================"
+echo "Array task:      ${SLURM_ARRAY_TASK_ID}"
+echo "Reference group: $G_DIR"
+echo
+echo "Isoform GFF:"
+echo "$ISOFORM_GFF"
+echo
+echo "Reference GTF:"
+echo "$REF_GTF"
+echo
+echo "Reference FASTA:"
+echo "$REF_FASTA"
+echo
+echo "Output directory:"
+echo "$OUT_DIR"
+echo "======================================================"
+
+
+# ============================================================
+# 7. Safety checks
+# ============================================================
+
+for FILE in \
+    "$ISOFORM_GFF" \
+    "$REF_GTF" \
+    "$REF_FASTA"
+do
+
+    if [[ ! -s "$FILE" ]]; then
+        echo "ERROR: Missing or empty file:"
+        echo "$FILE"
+        exit 1
+    fi
+
+done
+
+
+echo
+echo "Input sizes:"
+ls -lh \
+    "$ISOFORM_GFF" \
+    "$REF_GTF" \
+    "$REF_FASTA"
+
+echo
+
+
+# ============================================================
+# 8. Run SQANTI3 QC
+# ============================================================
+
+/usr/bin/time -v python "$SQANTI_PY" \
+    --isoforms "$ISOFORM_GFF" \
+    --refGTF "$REF_GTF" \
+    --refFasta "$REF_FASTA" \
+    --cpus "${SLURM_CPUS_PER_TASK}" \
+    --dir "$OUT_DIR" \
+    --output "${G_DIR}_sqanti" \
+    --report pdf
+
+
+# ============================================================
+# 9. Verify important output
+# ============================================================
+
+CLASS_FILE="${OUT_DIR}/${G_DIR}_sqanti_classification.txt"
+CORRECTED_GTF="${OUT_DIR}/${G_DIR}_sqanti_corrected.gtf"
+CORRECTED_FASTA="${OUT_DIR}/${G_DIR}_sqanti_corrected.fasta"
+
+
+for FILE in \
+    "$CLASS_FILE" \
+    "$CORRECTED_GTF" \
+    "$CORRECTED_FASTA"
+do
+
+    if [[ ! -s "$FILE" ]]; then
+        echo "ERROR: Expected SQANTI3 output not produced:"
+        echo "$FILE"
+        exit 1
+    fi
+
+done
+
+
+echo
+echo "======================================================"
+echo "SQANTI3 QC completed successfully"
+echo "Reference group: $G_DIR"
+echo "======================================================"
+
+ls -lh \
+    "$CLASS_FILE" \
+    "$CORRECTED_GTF" \
+    "$CORRECTED_FASTA"
+    
+# save as sqanti_qc_final.sh
+
+# Submitted batch job 27977229
+
+
+
+
+
+
+
+
+
+### sqanti3 filter step 
+
+
+#!/bin/bash -l
+#SBATCH --job-name=sqanti_filter
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=96G
+#SBATCH --time=24:00:00
+#SBATCH -p epyc
+#SBATCH --array=0-5
+#SBATCH --output=logs/sqanti_filter_%A_%a.out
+#SBATCH --error=logs/sqanti_filter_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+set -euo pipefail
+
+
+# ============================================================
+# 1. Environment
+# ============================================================
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+
+conda activate \
+/rhome/wcoll010/bigdata_groenlab/conda_envs/sqanti3_env
+
+
+# ============================================================
+# 2. Paths
+# ============================================================
+
+BASE_DIR="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+SOFTWARE_DIR="/rhome/wcoll010/bigdata_groenlab/iso_seq"
+
+SQANTI_TOOL_DIR="${SOFTWARE_DIR}/SQANTI3"
+
+FILTER_PY="${SQANTI_TOOL_DIR}/sqanti3_filter.py"
+
+export PATH="${PATH}:${SQANTI_TOOL_DIR}/utilities"
+
+
+# ============================================================
+# 3. Six reference groups
+# ============================================================
+
+GENOMES=(
+    "Vrip_X_Vrup"
+    "Vber_X_Vrup"
+    "Vrip_X_Vber"
+    "Vrip_X_Vace"
+    "CabSauv08"
+    "Vripa"
+)
+
+G_DIR="${GENOMES[$SLURM_ARRAY_TASK_ID]}"
+
+
+# ============================================================
+# 4. Inputs / Outputs
+# ============================================================
+
+QC_DIR="${BASE_DIR}/sqanti_results/${G_DIR}_sqanti"
+
+OUT_DIR="${QC_DIR}/filter_results"
+
+mkdir -p "$OUT_DIR"
+
+
+CLASS_FILE="${QC_DIR}/${G_DIR}_sqanti_classification.txt"
+
+CORRECTED_FASTA="${QC_DIR}/${G_DIR}_sqanti_corrected.fasta"
+
+CORRECTED_GTF="${QC_DIR}/${G_DIR}_sqanti_corrected.gtf"
+
+
+echo "======================================================"
+echo "SQANTI3 Rules Filtering"
+echo "======================================================"
+echo "Reference group: $G_DIR"
+echo
+echo "Classification:"
+echo "$CLASS_FILE"
+echo
+echo "Corrected FASTA:"
+echo "$CORRECTED_FASTA"
+echo
+echo "Corrected GTF:"
+echo "$CORRECTED_GTF"
+echo
+echo "Output:"
+echo "$OUT_DIR"
+echo "======================================================"
+
+
+# ============================================================
+# 5. Safety checks
+# ============================================================
+
+for FILE in \
+    "$CLASS_FILE" \
+    "$CORRECTED_FASTA" \
+    "$CORRECTED_GTF"
+do
+
+    if [[ ! -s "$FILE" ]]; then
+        echo "ERROR: Missing or empty SQANTI QC input:"
+        echo "$FILE"
+        exit 1
+    fi
+
+done
+
+
+# ============================================================
+# 6. Run SQANTI rules filter
+# ============================================================
+
+/usr/bin/time -v python "$FILTER_PY" rules \
+    --sqanti_class "$CLASS_FILE" \
+    --filter_isoforms "$CORRECTED_FASTA" \
+    --filter_gtf "$CORRECTED_GTF" \
+    -d "$OUT_DIR" \
+    -o "${G_DIR}_filtered"
+
+
+echo
+echo "======================================================"
+echo "Filtering complete"
+echo "Reference group: $G_DIR"
+echo "======================================================"
+
+ls -lh "$OUT_DIR"
+
+# save as sqanti_filter_final.sh
+
+sbatch --dependency=afterok:27977229 sqanti_filter_final.sh
+
+# Submitted batch job 27977309
+
+
+
+
+
+
+
+
+
