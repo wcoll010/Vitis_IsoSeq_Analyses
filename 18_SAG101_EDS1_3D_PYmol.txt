@@ -1,0 +1,483 @@
+### Below are the scripts used to generate 3D images/Figures of EDS1-SAG101 protein complexes based on the AlphaFold3 models using the .cif outputs from AlphaFold3
+### Data was downloaded to a local drive (MacBook pro) with PYMol installed 
+### PYmol can be downloaded here: https://www.pymol.org/
+
+
+
+
+### load model data
+load /Users/natecollison/Downloads/EDS1_P1__SAG101_P9_model.cif, p9
+load /Users/natecollison/Downloads/EDS1_P1__SAG101_P12_model.cif, p12
+
+
+# Start by aligning the two models on EDS1 P1, then compare where SAG101 P9 and P12 contact that same EDS1 surface. Your screenshot shows both complexes overlaid, so it’s hard to tell whether a visible gap comes from a difference at the interface or simply from how the two models are positioned.
+
+# Paste these commands into the PyMOL prompt at the bottom of the app. They assume chain A is EDS1 and chain B is SAG101 in both models. Check the chain assignments in the matching _data.json files before interpreting the colors
+
+align (p12 and chain A and name CA), (p9 and chain A and name CA)
+hide everything, all
+show cartoon, p9 or p12
+color marine, (p9 or p12) and chain A
+color orange, (p9 or p12) and chain B
+bg_color white
+
+select p9_eds_if, byres ((p9 and chain A and not elem H) within 4.0 of (p9 and chain B and not elem H))
+select p9_sag_if, byres ((p9 and chain B and not elem H) within 4.0 of (p9 and chain A and not elem H))
+select p12_eds_if, byres ((p12 and chain A and not elem H) within 4.0 of (p12 and chain B and not elem H))
+select p12_sag_if, byres ((p12 and chain B and not elem H) within 4.0 of (p12 and chain A and not elem H))
+
+show sticks, (p9_eds_if or p9_sag_if or p12_eds_if or p12_sag_if) and not elem H
+deselect
+zoom (p9_eds_if or p9_sag_if or p12_eds_if or p12_sag_if), 8
+disable p12
+
+
+
+
+
+
+# To compare which EDS1 residues are contacted in each model, paste these two lines. EDS1 P1 is the shared chain, so its residue numbers give you a direct point of comparison.
+
+iterate (p9_eds_if and name CA), print("P9 ", resn, resi)
+iterate (p12_eds_if and name CA), print("P12", resn, resi)
+
+
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P9_test.png, width=1500, height=1200, dpi=300, ray=1
+
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P12_test.png, width=1500, height=1200, dpi=300, ray=1
+
+
+
+
+
+# Install open source version of pymol
+
+conda create -n pymol-oss -c conda-forge --override-channels pymol-open-source
+conda activate pymol-oss
+cd ~/Downloads
+pymol
+
+
+# remake the figure 
+
+
+align (p12 and chain A and name CA), (p9 and chain A and name CA)
+hide everything, all
+show cartoon, p9 or p12
+color marine, (p9 or p12) and chain A
+color orange, (p9 or p12) and chain B
+bg_color white
+
+select p9_eds_if, byres ((p9 and chain A and not elem H) within 4.0 of (p9 and chain B and not elem H))
+select p9_sag_if, byres ((p9 and chain B and not elem H) within 4.0 of (p9 and chain A and not elem H))
+select p12_eds_if, byres ((p12 and chain A and not elem H) within 4.0 of (p12 and chain B and not elem H))
+select p12_sag_if, byres ((p12 and chain B and not elem H) within 4.0 of (p12 and chain A and not elem H))
+
+show sticks, (p9_eds_if or p9_sag_if or p12_eds_if or p12_sag_if) and not elem H
+deselect
+zoom (p9_eds_if or p9_sag_if or p12_eds_if or p12_sag_if), 8
+disable p12
+
+# save images
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P9_.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P12.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P9_P12.png, width=1500, height=1200, dpi=300, ray=1
+
+
+
+
+
+
+align (p9 and chain A and name CA), (jia_ref and chain A and name CA), cycles=0, transform=0, object=map_eds_p9
+align (p9 and chain B and name CA), (jia_ref and chain B and name CA), cycles=0, transform=0, object=map_sag_p9
+align (p12 and chain A and name CA), (jia_ref and chain A and name CA), cycles=0, transform=0, object=map_eds_p12
+align (p12 and chain B and name CA), (jia_ref and chain B and name CA), cycles=0, transform=0, object=map_sag_p12
+
+
+
+
+python
+sites = {
+    "eds": {"476", "493"},
+    "sag": {"304", "380", "384", "438"},
+}
+for partner, positions in sites.items():
+    for model in ("p9", "p12"):
+        print("\n", partner.upper(), model)
+        for column in cmd.get_raw_alignment(
+            f"map_{partner}_{model}", active_only=0
+        ):
+            atoms = dict(column)
+            if "jia_ref" not in atoms or model not in atoms:
+                continue
+            ref = cmd.get_model(f"jia_ref and index {atoms['jia_ref']}").atom[0]
+            if ref.resi not in positions:
+                continue
+            grape = cmd.get_model(f"{model} and index {atoms[model]}").atom[0]
+            print(f"Arabidopsis {ref.resn}{ref.resi} -> grapevine {grape.resn}{grape.resi}")
+python end
+
+
+
+
+disable map_*
+disable jia_ref
+disable p12
+enable p9
+deselect
+hide sticks, p9 or p12
+
+select pocket_p9, p9 and ((chain A and resi 480+498) or (chain B and resi 345+416+420+476))
+select pocket_p12, p12 and ((chain A and resi 480+498) or (chain B and resi 346+417+421+477))
+show sticks, (pocket_p9 or pocket_p12) and not elem H
+
+label (p9 and chain B and resi 416 and name CA), "Val416"
+label (p12 and chain B and resi 417 and name CA), "Thr417"
+zoom (pocket_p9 or pocket_p12), 8
+
+
+
+
+
+
+
+
+
+
+# The JSONs confirm the chain assignments. Chain A is the same 599-residue EDS1 P1 sequence in both models. Chain B is SAG101 P9 (575 residues) or SAG101 P12 (576 residues). They also confirm Val416 in P9 and Thr417 in P12, the two residues that your alignment mapped to Arabidopsis SAG101 Asn380.
+
+load /Users/natecollison/Downloads/EDS1_P1__SAG101_P9_model.cif, clean_p9
+load /Users/natecollison/Downloads/EDS1_P1__SAG101_P12_model.cif, clean_p12
+align (clean_p12 and chain A and name CA), (clean_p9 and chain A and name CA)
+
+create pocket_ref, jia_ref
+align (pocket_ref and chain A and name CA), (clean_p9 and chain A and name CA)
+
+select ligand_ref, pocket_ref and organic
+iterate ligand_ref, seen.add((resn, chain, resi)), space={"seen": set()}
+
+
+python
+print(sorted({(a.resn, a.chain, a.resi) for a in cmd.get_model("ligand_ref").atom}))
+python end
+
+
+print(sorted({(a.resn, a.chain, a.resi) for a in cmd.get_model("ligand_ref").atom}))
+
+
+# complexes with ligand modeled look the same 
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P9_ligand.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P12_ligand.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P9_P12_ligand_2.png, width=1500, height=1200, dpi=300, ray=1
+
+
+
+
+
+
+
+
+
+
+
+#  two matched close-ups, one for P9 and one for P12, with EDS1 Phe423 in yellow and the same two aligned SAG101 positions shown as sticks in both panels. That lets readers see that Phe423 stays at the interface while its closest SAG101 partners change.
+
+disable all
+enable clean_p9
+enable clean_p12
+hide sticks, clean_p9 or clean_p12
+hide labels, clean_p9 or clean_p12
+
+select phe423, (clean_p9 or clean_p12) and chain A and resi 423
+select lys_site, chain B and ((clean_p9 and resi 353) or (clean_p12 and resi 354))
+select gln_site, chain B and ((clean_p9 and resi 347) or (clean_p12 and resi 348))
+
+show sticks, (phe423 or lys_site or gln_site) and not elem H
+color yellow, phe423
+color cyan, lys_site
+color magenta, gln_site
+
+label phe423 and name CA, "EDS1 Phe423"
+label (lys_site or gln_site) and name CA, "%s%s" % (resn, resi)
+set label_color, black
+set label_outline_color, white
+deselect
+zoom (phe423 or lys_site or gln_site), 6
+disable clean_p12
+
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P12_lys.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P9_lys.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P9_12_lys.png, width=1500, height=1200, dpi=300, ray=1
+
+
+
+
+
+conda activate pymol-oss
+cd ~/Downloads
+
+cat > render_Val_Thr_pocket.pml <<'PML'
+load EDS1_P1__SAG101_P9_model.cif, p9
+load EDS1_P1__SAG101_P12_model.cif, p12
+fetch 7xjp, pocket_ref, type=cif, async=0
+
+align (p12 and chain A and name CA), (p9 and chain A and name CA)
+align (pocket_ref and chain A and name CA), (p9 and chain A and name CA)
+
+hide everything, all
+show cartoon, p9 or p12
+color marine, (p9 or p12) and chain A
+color orange, (p9 or p12) and chain B
+bg_color white
+
+select ligand_ref, pocket_ref and ((chain A and resn APR and resi 702) or (chain B and resn ATP and resi 601))
+select val_site, p9 and chain B and resn VAL and resi 416
+select thr_site, p12 and chain B and resn THR and resi 417
+
+show sticks, (ligand_ref or val_site or thr_site) and not elem H
+color magenta, ligand_ref
+color cyan, val_site or thr_site
+color red, thr_site and name OG1
+label (val_site and name CA), "SAG101 Val416"
+label (thr_site and name CA), "SAG101 Thr417"
+set label_color, black
+set label_outline_color, white
+deselect
+
+orient (ligand_ref or val_site or thr_site)
+zoom (ligand_ref or val_site or thr_site), 8
+disable p12
+png P9_Val416_ligand_pocket.png, width=1500, height=1200, dpi=300, ray=1
+disable p9
+enable p12
+png P12_Thr417_ligand_pocket.png, width=1500, height=1200, dpi=300, ray=1
+save SAG101_Val_Thr_ligand_pocket.pse
+PML
+
+pymol -cq render_Val_Thr_pocket.pml
+
+
+
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P9_12_Val.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P9_12_Thr.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P9_12_Thr_Val.png, width=1500, height=1200, dpi=300, ray=1
+
+
+
+
+
+### make one more comparison 
+### For the substitution figure, I’d show EDS1 Glu257 beside SAG101 Asn59 in P9 and Lys59 in P12. The script below draws a dashed line between the actual closest heavy atoms in each model, so readers can see exactly what was measured. It also prints the P12 Lys NZ-to-Glu oxygen distance separately to check whether the model supports a putative salt bridge.
+
+
+
+conda activate pymol-oss
+cd ~/Downloads
+
+cat > render_Glu257_residue59.pml <<'PML'
+load EDS1_P1__SAG101_P9_model.cif, p9
+load EDS1_P1__SAG101_P12_model.cif, p12
+align (p12 and chain A and name CA), (p9 and chain A and name CA)
+
+hide everything, all
+show cartoon, p9 or p12
+color marine, (p9 or p12) and chain A
+color orange, (p9 or p12) and chain B
+bg_color white
+
+select glu257, (p9 or p12) and chain A and resn GLU and resi 257
+select asn59, p9 and chain B and resn ASN and resi 59
+select lys59, p12 and chain B and resn LYS and resi 59
+show sticks, (glu257 or asn59 or lys59) and not elem H
+color yellow, glu257
+color cyan, asn59 or lys59
+color red, glu257 and name OE1+OE2
+color blue, lys59 and name NZ
+
+label (glu257 and name CA), "EDS1 Glu257"
+label (asn59 and name CA), "SAG101 Asn59"
+label (lys59 and name CA), "SAG101 Lys59"
+set label_color, black
+set label_outline_color, white
+set label_digits, 2
+set dash_color, gray50
+
+python
+from math import dist
+from pymol import cmd
+
+def closest_atoms(selection_a, selection_b):
+    atoms_a = cmd.get_model(f"({selection_a}) and not elem H").atom
+    atoms_b = cmd.get_model(f"({selection_b}) and not elem H").atom
+    if not atoms_a or not atoms_b:
+        raise ValueError(f"Empty atom selection: {selection_a} or {selection_b}")
+    a, b = min(
+        ((a, b) for a in atoms_a for b in atoms_b),
+        key=lambda pair: dist(pair[0].coord, pair[1].coord),
+    )
+    return a, b, dist(a.coord, b.coord)
+
+for model, partner in (("p9", "asn59"), ("p12", "lys59")):
+    a, b, distance = closest_atoms(f"{model} and glu257", partner)
+    print(f"{model}: Glu257 {a.name} to {b.resn}{b.resi} {b.name}: {distance:.2f} A")
+    cmd.distance(
+        f"gap_{model}",
+        f"{model} and index {a.index}",
+        f"{model} and index {b.index}",
+        cutoff=30.0,
+        mode=0,
+    )
+
+a, b, distance = closest_atoms("p12 and glu257 and name OE1+OE2", "lys59 and name NZ")
+print(f"P12 charged atoms: Glu257 {a.name} to Lys59 {b.name}: {distance:.2f} A")
+python end
+
+deselect
+orient (glu257 or asn59 or lys59)
+zoom (glu257 or asn59 or lys59), 8
+
+disable p12
+disable gap_p12
+png P9_Asn59_Glu257_distance.png, width=1500, height=1200, dpi=300, ray=1
+
+disable p9
+disable gap_p9
+enable p12
+enable gap_p12
+png P12_Lys59_Glu257_distance.png, width=1500, height=1200, dpi=300, ray=1
+save Glu257_residue59_comparison.pse
+PML
+
+pymol -cq render_Glu257_residue59.pml &&
+  pymol Glu257_residue59_comparison.pse
+  
+
+
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P9_Asn_2.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P12_Lys_2.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_P9_P12_Lys_2.png, width=1500, height=1200, dpi=300, ray=1
+
+
+
+
+
+
+
+### Now analyze the isoforms expressed in 1616 and SO4/5BB
+
+
+conda activate pymol-oss
+cd ~/Downloads
+
+cat > compare_SAG101_protein_groups.pml <<'PML'
+load EDS1_P1__SAG101_PG001_model.cif, pg001
+load EDS1_P1__SAG101_PG002_model.cif, pg002
+load EDS1_P1__SAG101_PG004_model.cif, pg004
+
+align (pg002 and chain A and name CA), (pg001 and chain A and name CA), cycles=0
+align (pg004 and chain A and name CA), (pg001 and chain A and name CA), cycles=0
+
+hide everything, all
+show cartoon, pg001 or pg002 or pg004
+color marine, chain A
+color orange, chain B
+color gray70, pg001 and chain B and resi 1-292
+bg_color white
+set orthoscopic, on
+
+orient pg001
+zoom (pg001 or pg002 or pg004), 7
+disable pg002
+disable pg004
+PML
+
+pymol compare_SAG101_protein_groups.pml
+
+
+
+
+
+
+
+
+
+
+
+## compare all SAG101 isoforms with ligand modeled 
+conda activate pymol-oss
+cd ~/Downloads
+
+python - <<'PY'
+from pathlib import Path
+
+source = Path("render_all_SAG101_interfaces.pml")
+script = source.read_text()
+
+marker = "orient pg001"
+if script.count(marker) != 1:
+    raise SystemExit(f"Expected one '{marker}' line in {source}")
+
+ligand_setup = """\
+fetch 7xjp, pocket_ref, type=cif, async=0
+align (pocket_ref and chain A and name CA), (pg001 and chain A and name CA)
+hide everything, pocket_ref
+select ligand_ref, pocket_ref and ((chain A and resn APR and resi 702) or (chain B and resn ATP and resi 601))
+show sticks, ligand_ref and not elem H
+color magenta, ligand_ref
+deselect
+
+"""
+
+script = script.replace(marker, ligand_setup + marker, 1)
+for group in ("001", "002", "003", "004"):
+    script = script.replace(
+        f"enable pg{group}\n",
+        f"enable pg{group}\nenable pocket_ref\n",
+    )
+    script = script.replace(
+        f"SAG101_PG{group}_interface.png",
+        f"SAG101_PG{group}_interface_ligand.png",
+    )
+
+script = script.replace(
+    "SAG101_four_interfaces.pse",
+    "SAG101_four_interfaces_ligand.pse",
+)
+Path("render_all_SAG101_interfaces_ligand.pml").write_text(script)
+PY
+
+pymol -cq render_all_SAG101_interfaces_ligand.pml &&
+  pymol SAG101_four_interfaces_ligand.pse
+
+
+
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_ALL.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_PG001.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_PG002.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_PG003.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_PG004.png, width=1500, height=1200, dpi=300, ray=1
+
+
+
+
+
+disable all
+enable pg001
+
+show surface, (pg001 or pg002 or pg004) and polymer.protein
+set transparency, 0.45, (pg001 or pg002 or pg004) and chain B
+hide cartoon, (pg001 or pg002 or pg004) and chain A
+bg_color white
+
+zoom (pg001 or pg002 or pg004), 8
+
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_PG001VS002.png, width=1500, height=1200, dpi=300, ray=1
+
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_PG001.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_PG002.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_PG004.png, width=1500, height=1200, dpi=300, ray=1
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_PG001_Ligand.png, width=1500, height=1200, dpi=300, ray=1
+
+png /Users/natecollison/Downloads/EDS1_P1_SAG101_PG001_PG003.png, width=1500, height=1200, dpi=300, ray=1
+
+
