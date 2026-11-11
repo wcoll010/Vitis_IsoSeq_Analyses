@@ -1,0 +1,1808 @@
+### Run PRGminer tool to predict resistance (R) genes/innate immune receptors
+
+
+### First, filter the sqanti3 catalogs (reference transcriptomes) so that only genes/proteins which are expressed are analyzed using bash script
+
+
+#!/bin/bash
+#SBATCH --job-name=PRGminer_Filter
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+#SBATCH --time=02:00:00
+#SBATCH -p epyc
+#SBATCH --output=/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/logs/prgminer_filter_%j.out
+#SBATCH --error=/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/logs/prgminer_filter_%j.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+
+BASE="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+COUNT_DIR="$BASE/DE_isoform_analysis"
+PROTEIN_DIR="$BASE/eggnog_input"
+OUT_DIR="$BASE/PRGminer_filtered_inputs"
+
+mkdir -p "$OUT_DIR"
+mkdir -p "$BASE/logs"
+
+
+# ============================================================
+# Load R
+# ============================================================
+
+module load R/4.5.2
+
+
+# ============================================================
+# Six current reference transcriptomes
+# ============================================================
+
+REFERENCES=(
+    "CabSauv08"
+    "Vripa"
+    "Vrip_X_Vace"
+    "Vrip_X_Vber"
+    "Vrip_X_Vrup"
+    "Vber_X_Vrup"
+)
+
+
+# ============================================================
+# Overall summary file
+# ============================================================
+
+SUMMARY="$OUT_DIR/PRGminer_FPM_filter_summary.tsv"
+
+echo -e \
+"Reference\tGenotypes\tExpressed_isoforms_union\tFASTA_isoforms\tMatched_isoforms\tOriginal_protein_records\tFiltered_protein_records" \
+> "$SUMMARY"
+
+
+# ============================================================
+# Process each reference
+# ============================================================
+
+for REFERENCE in "${REFERENCES[@]}"
+do
+
+    echo
+    echo "============================================================"
+    echo "Reference: $REFERENCE"
+    echo "============================================================"
+
+
+    # --------------------------------------------------------
+    # Reference -> biological genotype mapping
+    # --------------------------------------------------------
+
+    case "$REFERENCE" in
+
+        CabSauv08)
+            GENOTYPES=("cab33")
+            ;;
+
+        Vripa)
+            GENOTYPES=("ripa")
+            ;;
+
+        Vrip_X_Vace)
+            GENOTYPES=("1616")
+            ;;
+
+        Vrip_X_Vber)
+            GENOTYPES=("5BB" "SO4")
+            ;;
+
+        Vrip_X_Vrup)
+            GENOTYPES=("101-14" "3309" "sw")
+            ;;
+
+        Vber_X_Vrup)
+            GENOTYPES=("1103" "99R")
+            ;;
+
+        *)
+            echo "ERROR: Unknown reference: $REFERENCE"
+            exit 1
+            ;;
+
+    esac
+
+
+    # --------------------------------------------------------
+    # Reference-level paths
+    # --------------------------------------------------------
+
+    INPUT_FAA="$PROTEIN_DIR/${REFERENCE}_filtered_proteins.faa"
+
+    UNION_LIST="$OUT_DIR/${REFERENCE}_retained_isoforms.txt"
+
+    FASTA_ID_LIST="$OUT_DIR/${REFERENCE}_protein_fasta_isoforms.txt"
+
+    MATCHED_LIST="$OUT_DIR/${REFERENCE}_matched_isoforms.txt"
+
+    FILTERED_FAA="$OUT_DIR/${REFERENCE}_count_filtered_proteins.faa"
+
+
+    # Remove old versions
+    rm -f "$UNION_LIST"
+    rm -f "$FASTA_ID_LIST"
+    rm -f "$MATCHED_LIST"
+    rm -f "$FILTERED_FAA"
+
+    touch "$UNION_LIST"
+
+
+    # ========================================================
+    # Apply FPM filter independently within each genotype
+    #
+    # Criterion:
+    #
+    # FPM > 0.1 in at least 2 biological samples
+    #
+    # Treatment identity does NOT matter.
+    # ========================================================
+
+    for GENOTYPE in "${GENOTYPES[@]}"
+    do
+
+        COUNT_FILE="$COUNT_DIR/${GENOTYPE}/${GENOTYPE}_sqanti_filtered_oarfish_counts.tsv"
+
+        PASS_FILE="$OUT_DIR/${GENOTYPE}_FPM0.1_2samples_isoforms.txt"
+
+        QC_FILE="$OUT_DIR/${GENOTYPE}_FPM_library_sizes.tsv"
+
+
+        echo
+        echo "------------------------------------------------------------"
+        echo "Genotype: $GENOTYPE"
+        echo "------------------------------------------------------------"
+
+        echo "Count file:"
+        echo "$COUNT_FILE"
+
+
+        if [[ ! -s "$COUNT_FILE" ]]
+        then
+
+            echo "ERROR: Missing count file:"
+            echo "$COUNT_FILE"
+            exit 1
+
+        fi
+
+
+        # ----------------------------------------------------
+        # R:
+        # 1. read fractional Oarfish counts
+        # 2. calculate library size for each sample
+        # 3. convert to FPM
+        # 4. retain isoform if FPM > 0.1 in >=2 samples
+        # ----------------------------------------------------
+
+        Rscript --vanilla - \
+            "$COUNT_FILE" \
+            "$PASS_FILE" \
+            "$QC_FILE" <<'RSCRIPT'
+
+args <- commandArgs(trailingOnly = TRUE)
+
+count_file <- args[1]
+pass_file  <- args[2]
+qc_file    <- args[3]
+
+
+# ============================================================
+# Read count matrix
+#
+# First column contains PB isoform identifiers.
+# We deliberately access the first column by position because
+# some older matrices have a blank first-column header.
+# ============================================================
+
+dat <- read.delim(
+    count_file,
+    header = TRUE,
+    sep = "\t",
+    check.names = FALSE,
+    stringsAsFactors = FALSE,
+    row.names = NULL
+)
+
+
+if (ncol(dat) < 3) {
+    stop("Count matrix has fewer than 2 biological samples.")
+}
+
+
+isoform <- as.character(dat[[1]])
+
+counts <- dat[, -1, drop = FALSE]
+
+
+# Convert all sample columns explicitly to numeric
+counts[] <- lapply(
+    counts,
+    function(x) as.numeric(as.character(x))
+)
+
+
+counts <- as.matrix(counts)
+
+
+# ============================================================
+# Validate PB IDs
+# ============================================================
+
+n_pb <- sum(grepl("^PB\\.", isoform))
+
+if (n_pb == 0) {
+    stop("No PB isoform IDs detected in first column.")
+}
+
+
+# ============================================================
+# Library sizes
+# ============================================================
+
+lib_size <- colSums(
+    counts,
+    na.rm = TRUE
+)
+
+
+if (any(lib_size <= 0)) {
+    stop("At least one sample has library size <= 0.")
+}
+
+
+# ============================================================
+# Calculate FPM
+#
+# FPM = count / total mapped isoform counts * 1,000,000
+# ============================================================
+
+fpm <- sweep(
+    counts,
+    2,
+    lib_size,
+    "/"
+) * 1e6
+
+
+# ============================================================
+# Expression filter
+#
+# Keep if:
+#
+# FPM > 0.1 in at least 2 biological samples
+#
+# Samples can be from either Control or Infested.
+# ============================================================
+
+n_samples_above_threshold <- rowSums(
+    fpm > 0.1,
+    na.rm = TRUE
+)
+
+
+keep <- (
+    grepl("^PB\\.", isoform) &
+    n_samples_above_threshold >= 2
+)
+
+
+retained <- sort(
+    unique(
+        isoform[keep]
+    )
+)
+
+
+writeLines(
+    retained,
+    pass_file
+)
+
+
+# ============================================================
+# Save library-size QC
+# ============================================================
+
+qc <- data.frame(
+    Sample = colnames(counts),
+    Library_size = lib_size,
+    stringsAsFactors = FALSE
+)
+
+
+write.table(
+    qc,
+    qc_file,
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+)
+
+
+# ============================================================
+# Report
+# ============================================================
+
+cat("Total isoforms in matrix: ",
+    nrow(dat),
+    "\n",
+    sep = ""
+)
+
+cat("Number of biological samples: ",
+    ncol(counts),
+    "\n",
+    sep = ""
+)
+
+cat("Isoforms passing FPM > 0.1 in >=2 samples: ",
+    length(retained),
+    "\n",
+    sep = ""
+)
+
+cat("\nLibrary sizes:\n")
+
+for (i in seq_along(lib_size)) {
+
+    cat(
+        colnames(counts)[i],
+        "\t",
+        format(lib_size[i], scientific = FALSE),
+        "\n",
+        sep = ""
+    )
+}
+
+RSCRIPT
+
+
+        STATUS=$?
+
+        if [[ "$STATUS" -ne 0 ]]
+        then
+
+            echo "ERROR: FPM filtering failed for $GENOTYPE"
+            exit 1
+
+        fi
+
+
+        N_GENOTYPE_RETAINED=$(wc -l < "$PASS_FILE")
+
+
+        echo
+        echo "Retained isoforms for $GENOTYPE:"
+        echo "$N_GENOTYPE_RETAINED"
+
+
+        # Add genotype-level passing isoforms to reference union
+        cat "$PASS_FILE" >> "$UNION_LIST"
+
+    done
+
+
+    # ========================================================
+    # Reference-level UNION
+    #
+    # Example:
+    #
+    # Vrip_X_Vrup =
+    # expressed in 101-14
+    #       UNION
+    # expressed in 3309
+    #       UNION
+    # expressed in sw
+    # ========================================================
+
+    sort -u "$UNION_LIST" \
+        -o "$UNION_LIST"
+
+
+    N_RETAINED=$(wc -l < "$UNION_LIST")
+
+
+    echo
+    echo "------------------------------------------------------------"
+    echo "Reference-level expression filter"
+    echo "------------------------------------------------------------"
+
+    echo "Reference: $REFERENCE"
+
+    echo "Genotypes:"
+    echo "${GENOTYPES[*]}"
+
+    echo "Union of expressed PB isoforms:"
+    echo "$N_RETAINED"
+
+
+    if [[ "$N_RETAINED" -eq 0 ]]
+    then
+
+        echo "ERROR: No expressed isoforms retained."
+        exit 1
+
+    fi
+
+
+    # ========================================================
+    # Check protein FASTA
+    # ========================================================
+
+    if [[ ! -s "$INPUT_FAA" ]]
+    then
+
+        echo "ERROR: Missing protein FASTA:"
+        echo "$INPUT_FAA"
+        exit 1
+
+    fi
+
+
+    # ========================================================
+    # Extract PB transcript IDs represented in protein FASTA
+    # ========================================================
+
+    awk '
+    /^>/ {
+        id = $1
+        sub(/^>/, "", id)
+        print id
+    }
+    ' "$INPUT_FAA" \
+        | sort -u \
+        > "$FASTA_ID_LIST"
+
+
+    N_FASTA_IDS=$(wc -l < "$FASTA_ID_LIST")
+
+    N_ORIGINAL_PROTEINS=$(grep -c '^>' "$INPUT_FAA")
+
+
+    # ========================================================
+    # Determine overlap between expressed PB IDs and proteins
+    # ========================================================
+
+    comm -12 \
+        "$UNION_LIST" \
+        "$FASTA_ID_LIST" \
+        > "$MATCHED_LIST"
+
+
+    N_MATCHED=$(wc -l < "$MATCHED_LIST")
+
+
+    echo
+    echo "Unique PB isoforms represented in protein FASTA:"
+    echo "$N_FASTA_IDS"
+
+    echo
+    echo "Expressed PB isoforms with predicted protein:"
+    echo "$N_MATCHED"
+
+
+    if [[ "$N_MATCHED" -eq 0 ]]
+    then
+
+        echo "ERROR: No overlap between expressed isoforms and protein FASTA."
+        exit 1
+
+    fi
+
+
+    # ========================================================
+    # Filter predicted protein FASTA
+    #
+    # All predicted ORFs associated with an expressed PB
+    # transcript are retained.
+    # ========================================================
+
+    awk '
+    NR == FNR {
+        keep[$1] = 1
+        next
+    }
+
+    /^>/ {
+        id = $1
+        sub(/^>/, "", id)
+        print_record = (id in keep)
+    }
+
+    print_record {
+        print
+    }
+
+    ' "$MATCHED_LIST" "$INPUT_FAA" \
+        > "$FILTERED_FAA"
+
+
+    N_FILTERED_PROTEINS=$(grep -c '^>' "$FILTERED_FAA")
+
+
+    # ========================================================
+    # Summary
+    # ========================================================
+
+    echo
+    echo "------------------------------------------------------------"
+    echo "SUMMARY: $REFERENCE"
+    echo "------------------------------------------------------------"
+
+    echo "Genotypes:"
+    echo "${GENOTYPES[*]}"
+
+    echo
+    echo "Expressed PB isoforms in union:"
+    echo "$N_RETAINED"
+
+    echo
+    echo "Unique PB isoforms represented in protein FASTA:"
+    echo "$N_FASTA_IDS"
+
+    echo
+    echo "Expressed PB isoforms with predicted protein:"
+    echo "$N_MATCHED"
+
+    echo
+    echo "Original protein records:"
+    echo "$N_ORIGINAL_PROTEINS"
+
+    echo
+    echo "Filtered protein records:"
+    echo "$N_FILTERED_PROTEINS"
+
+    echo
+    echo "Filtered FASTA:"
+    echo "$FILTERED_FAA"
+
+
+    if [[ "$N_FILTERED_PROTEINS" -eq 0 ]]
+    then
+
+        echo "ERROR: Filtered protein FASTA is empty."
+        exit 1
+
+    fi
+
+
+    # Add row to overall summary
+    GENOTYPE_STRING=$(IFS=, ; echo "${GENOTYPES[*]}")
+
+    echo -e \
+"${REFERENCE}\t${GENOTYPE_STRING}\t${N_RETAINED}\t${N_FASTA_IDS}\t${N_MATCHED}\t${N_ORIGINAL_PROTEINS}\t${N_FILTERED_PROTEINS}" \
+    >> "$SUMMARY"
+
+
+done
+
+
+echo
+echo "============================================================"
+echo "SUCCESS: all six expression-filtered PRGminer FASTAs created"
+echo "============================================================"
+
+echo
+echo "Summary:"
+cat "$SUMMARY"
+
+echo
+echo "Finished:"
+date
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Next step: set up conda environment and run PRGminer 
+
+# Initialize conda
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+
+# Set installation paths
+SOFTWARE_DIR="/rhome/wcoll010/bigdata_groenlab/software"
+ENV_DIR="/rhome/wcoll010/bigdata_groenlab/conda_envs/PRGminer"
+
+mkdir -p "$SOFTWARE_DIR" "$(dirname "$ENV_DIR")"
+cd "$SOFTWARE_DIR"
+
+# Load Git LFS before downloading the repository
+module load git-lfs
+git lfs install
+
+# Download PRGminer and its large files
+git clone https://github.com/navduhan/PRGminer.git
+cd PRGminer
+git lfs pull
+
+# Create and activate the conda environment
+conda env create -f environment.yml -p "$ENV_DIR"
+conda activate "$ENV_DIR"
+
+# Install PRGminer
+python -m pip install .
+
+# Apply the setuptools compatibility fix used in your installation
+python -m pip install "setuptools<70"
+
+# Make the environment's shared libraries available
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# Verify that pkg_resources and the PRGminer command are available
+python -c "import pkg_resources; print('pkg_resources import successful')"
+PRGminer --help
+
+
+
+
+
+
+
+
+
+
+
+# Run PRGminer
+
+#!/bin/bash
+#SBATCH --job-name=PRGminer_Array
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=80G
+#SBATCH --time=24:00:00
+#SBATCH --array=1-6%3
+#SBATCH --output=/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/logs/prgminer_%A_%a.out
+#SBATCH --error=/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/logs/prgminer_%A_%a.err
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+
+# ============================================================
+# 1. Project directories
+# ============================================================
+
+BASE="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+INPUT_DIR="$BASE/PRGminer_filtered_inputs"
+OUTPUT_BASE="$BASE/rga_annotations"
+
+
+mkdir -p "$OUTPUT_BASE"
+
+
+# ============================================================
+# 2. Six current reference transcriptomes
+# ============================================================
+
+REFERENCES=(
+    "CabSauv08"
+    "Vripa"
+    "Vrip_X_Vace"
+    "Vrip_X_Vber"
+    "Vrip_X_Vrup"
+    "Vber_X_Vrup"
+)
+
+
+# ============================================================
+# 3. Select reference for this array task
+# ============================================================
+
+INDEX=$((SLURM_ARRAY_TASK_ID - 1))
+
+REFERENCE="${REFERENCES[$INDEX]}"
+
+
+echo "============================================================"
+echo "PRGminer array task"
+echo "============================================================"
+echo
+echo "SLURM array task: $SLURM_ARRAY_TASK_ID"
+echo "Reference:        $REFERENCE"
+echo "Host:             $(hostname)"
+echo "Date:             $(date)"
+echo
+
+
+# ============================================================
+# 4. Initialize Conda / PRGminer
+# ============================================================
+
+source /opt/linux/rhel/8.x/x86_64/pkgs/miniconda3/py39_4.12.0/etc/profile.d/conda.sh
+
+conda activate \
+/rhome/wcoll010/bigdata_groenlab/conda_envs/PRGminer
+
+
+# Fix library path for GLIBCXX
+export LD_LIBRARY_PATH=/rhome/wcoll010/bigdata_groenlab/conda_envs/PRGminer/lib:$LD_LIBRARY_PATH
+
+
+echo "PRGminer executable:"
+which PRGminer
+
+echo
+
+
+# ============================================================
+# 5. Input and output paths
+# ============================================================
+
+INPUT_FAA="$INPUT_DIR/${REFERENCE}_count_filtered_proteins.faa"
+
+OUT_DIR="$OUTPUT_BASE/${REFERENCE}"
+
+OUTPUT_FILE="${REFERENCE}_rga_annotations.tsv"
+
+
+mkdir -p "$OUT_DIR"
+
+
+echo "Input FASTA:"
+echo "$INPUT_FAA"
+
+echo
+echo "Output directory:"
+echo "$OUT_DIR"
+
+echo
+
+
+# ============================================================
+# 6. Check filtered FASTA
+# ============================================================
+
+if [[ ! -s "$INPUT_FAA" ]]
+then
+
+    echo "ERROR: Input FASTA does not exist or is empty:"
+    echo "$INPUT_FAA"
+
+    exit 1
+
+fi
+
+
+N_PROTEINS=$(grep -c '^>' "$INPUT_FAA")
+
+
+echo "Protein records supplied to PRGminer:"
+echo "$N_PROTEINS"
+
+echo
+
+echo "First five FASTA headers:"
+grep '^>' "$INPUT_FAA" | head -5
+
+echo
+
+
+# ============================================================
+# 7. Run PRGminer
+#
+# -i  = filtered protein FASTA
+# -od = output directory
+# -o  = output filename
+# -l  = Phase2 detailed classification
+# ============================================================
+
+echo "============================================================"
+echo "Starting PRGminer"
+echo "============================================================"
+
+PRGminer \
+    -i "$INPUT_FAA" \
+    -od "$OUT_DIR" \
+    -o "$OUTPUT_FILE" \
+    -l Phase2
+
+
+STATUS=$?
+
+
+# ============================================================
+# 8. Report completion
+# ============================================================
+
+echo
+echo "============================================================"
+
+if [[ "$STATUS" -eq 0 ]]
+then
+
+    echo "PRGminer completed successfully."
+
+else
+
+    echo "PRGminer FAILED."
+    echo "Exit status: $STATUS"
+
+fi
+
+echo "============================================================"
+
+echo
+echo "Reference: $REFERENCE"
+echo "Input proteins: $N_PROTEINS"
+echo "Finished: $(date)"
+
+echo
+echo "Output files:"
+
+find "$OUT_DIR" \
+    -maxdepth 2 \
+    -type f \
+    -printf "%p\t%k KB\n" \
+    | sort
+
+
+exit "$STATUS"
+
+
+
+
+
+
+
+
+
+
+### Annotate genes in the target WGCNA modules (midnightblue, lightcyan, white) with R gene annotations
+
+#!/usr/bin/env Rscript
+
+.libPaths(c(
+  "/rhome/wcoll010/bigdata_groenlab/R_libs",
+  .libPaths()
+))
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+
+# ============================================================
+# 1. Paths
+# ============================================================
+
+BASE <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+RGA_FILE <- file.path(
+  BASE,
+  "rga_annotations",
+  "Vrip_X_Vrup",
+  "Vrip_X_Vrup_rga_annotations.tsv"
+)
+
+SQANTI_FILE <- file.path(
+  BASE,
+  "sqanti_results",
+  "Vrip_X_Vrup_sqanti",
+  "filter_results",
+  "Vrip_X_Vrup_filtered_RulesFilter_result_classification.txt"
+)
+
+WGCNA_FILE <- file.path(
+  BASE,
+  "WGCNA_Vrip_X_Vrup",
+  "signed_network",
+  "signed_power16_WGCNA_Modules_Annotated.csv"
+)
+
+TOP50_FILE <- file.path(
+  BASE,
+  "WGCNA_Vrip_X_Vrup",
+  "signed_network",
+  "target_module_hubs",
+  "Top_50_Hub_Genes_All_Target_Modules.csv"
+)
+
+OUT_DIR <- file.path(
+  BASE,
+  "WGCNA_Vrip_X_Vrup",
+  "signed_network",
+  "PRGminer_overlap"
+)
+
+dir.create(
+  OUT_DIR,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+
+target_modules <- c(
+  "lightcyan",
+  "white",
+  "midnightblue"
+)
+
+
+# ============================================================
+# 2. Check input files
+# ============================================================
+
+for(f in c(
+  RGA_FILE,
+  SQANTI_FILE,
+  WGCNA_FILE,
+  TOP50_FILE
+)) {
+
+  if(!file.exists(f)) {
+    stop(
+      "Missing input file:\n",
+      f
+    )
+  }
+}
+
+
+# ============================================================
+# 3. Read PRGminer results
+# ============================================================
+
+rga <- read.delim(
+  RGA_FILE,
+  header = TRUE,
+  sep = "\t",
+  quote = "",
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+
+cat("\n============================================\n")
+cat("PRGMINER INPUT\n")
+cat("============================================\n")
+
+cat(
+  "PRGminer rows:",
+  nrow(rga),
+  "\n"
+)
+
+cat(
+  "Unique PRGminer PB IDs:",
+  dplyr::n_distinct(rga$SampleID),
+  "\n"
+)
+
+
+required_rga_cols <- c(
+  "SampleID",
+  "Prediction",
+  "CNL",
+  "KIN",
+  "LYK",
+  "LECRK",
+  "RLK",
+  "RLP",
+  "TIR",
+  "TNL"
+)
+
+
+missing_rga <- setdiff(
+  required_rga_cols,
+  colnames(rga)
+)
+
+
+if(length(missing_rga) > 0) {
+
+  stop(
+    "Missing PRGminer columns: ",
+    paste(
+      missing_rga,
+      collapse = ", "
+    )
+  )
+}
+
+
+# Rename PB identifier consistently
+rga <- rga %>%
+
+  mutate(
+    SampleID = trimws(SampleID),
+    Prediction = trimws(Prediction)
+  ) %>%
+
+  filter(
+    !is.na(SampleID),
+    SampleID != "",
+    grepl("^PB\\.", SampleID)
+  ) %>%
+
+  rename(
+    Isoform_ID = SampleID
+  )
+
+
+# In case PRGminer output happens to contain explicit
+# Non-Rgene rows, remove those.
+rga <- rga %>%
+
+  filter(
+    is.na(Prediction) |
+      Prediction != "Non-Rgene"
+  )
+
+
+cat(
+  "R-gene prediction rows retained:",
+  nrow(rga),
+  "\n"
+)
+
+cat(
+  "Unique R-gene PB isoforms:",
+  dplyr::n_distinct(rga$Isoform_ID),
+  "\n"
+)
+
+cat("\nPrediction classes:\n")
+
+print(
+  rga %>%
+    count(
+      Prediction,
+      sort = TRUE
+    )
+)
+
+
+# ============================================================
+# 4. Read current SQANTI3 filtered classification
+#
+# This gives:
+#
+# PB isoform -> associated reference gene
+# ============================================================
+
+sqanti <- read.delim(
+  SQANTI_FILE,
+  header = TRUE,
+  sep = "\t",
+  quote = "",
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+
+cat("\n============================================\n")
+cat("SQANTI BRIDGE\n")
+cat("============================================\n")
+
+
+required_sqanti <- c(
+  "isoform",
+  "associated_gene",
+  "filter_result"
+)
+
+
+missing_sqanti <- setdiff(
+  required_sqanti,
+  colnames(sqanti)
+)
+
+
+if(length(missing_sqanti) > 0) {
+
+  stop(
+    "Missing SQANTI columns: ",
+    paste(
+      missing_sqanti,
+      collapse = ", "
+    )
+  )
+}
+
+
+bridge <- sqanti %>%
+
+  filter(
+    filter_result == "Isoform"
+  ) %>%
+
+  dplyr::select(
+    Isoform_ID = isoform,
+    Gene_ID = associated_gene
+  ) %>%
+
+  filter(
+    !is.na(Isoform_ID),
+    Isoform_ID != "",
+    !is.na(Gene_ID),
+    Gene_ID != ""
+  ) %>%
+
+  distinct()
+
+
+cat(
+  "SQANTI-retained PB-to-gene mappings:",
+  nrow(bridge),
+  "\n"
+)
+
+cat(
+  "Unique SQANTI genes:",
+  dplyr::n_distinct(bridge$Gene_ID),
+  "\n"
+)
+
+
+# Check for PB IDs mapping to >1 gene
+ambiguous <- bridge %>%
+
+  count(
+    Isoform_ID,
+    name = "N_Genes"
+  ) %>%
+
+  filter(
+    N_Genes > 1
+  )
+
+
+cat(
+  "PB isoforms mapping to >1 gene:",
+  nrow(ambiguous),
+  "\n"
+)
+
+
+if(nrow(ambiguous) > 0) {
+
+  write.csv(
+    ambiguous,
+    file.path(
+      OUT_DIR,
+      "SQANTI_ambiguous_PB_gene_mappings.csv"
+    ),
+    row.names = FALSE
+  )
+
+  stop(
+    "Ambiguous PB-to-gene mappings detected. ",
+    "Inspect SQANTI_ambiguous_PB_gene_mappings.csv"
+  )
+}
+
+
+# ============================================================
+# 5. Map PRGminer-positive isoforms to genes
+# ============================================================
+
+rga_gene <- rga %>%
+
+  left_join(
+    bridge,
+    by = "Isoform_ID"
+  )
+
+
+cat("\n============================================\n")
+cat("PRGMINER -> GENE MAPPING\n")
+cat("============================================\n")
+
+
+cat(
+  "PRGminer rows with SQANTI gene:",
+  sum(!is.na(rga_gene$Gene_ID)),
+  "of",
+  nrow(rga_gene),
+  "\n"
+)
+
+cat(
+  "Unique PRGminer PB IDs with SQANTI gene:",
+  dplyr::n_distinct(
+    rga_gene$Isoform_ID[
+      !is.na(rga_gene$Gene_ID)
+    ]
+  ),
+  "\n"
+)
+
+
+write.csv(
+  rga_gene,
+  file.path(
+    OUT_DIR,
+    "Vrip_X_Vrup_PRGminer_Rgene_isoform_to_gene.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ============================================================
+# 6. Build GENE-LEVEL PRGminer summary
+#
+# IMPORTANT:
+# A gene may have multiple PRGminer-positive isoforms
+# and potentially multiple predicted R-gene classes.
+#
+# We therefore preserve all classes rather than forcing
+# a gene into one category.
+# ============================================================
+
+max_or_na <- function(x) {
+
+  x <- suppressWarnings(
+    as.numeric(x)
+  )
+
+  if(all(is.na(x))) {
+    return(NA_real_)
+  }
+
+  max(
+    x,
+    na.rm = TRUE
+  )
+}
+
+
+probability_cols <- c(
+  "CNL",
+  "KIN",
+  "LYK",
+  "LECRK",
+  "RLK",
+  "RLP",
+  "TIR",
+  "TNL"
+)
+
+
+rga_gene_summary <- rga_gene %>%
+
+  filter(
+    !is.na(Gene_ID),
+    Gene_ID != ""
+  ) %>%
+
+  group_by(
+    Gene_ID
+  ) %>%
+
+  summarise(
+
+    PRGminer_Rgene = TRUE,
+
+    N_Rgene_Isoforms =
+      n_distinct(Isoform_ID),
+
+    Rgene_Isoforms =
+      paste(
+        sort(
+          unique(Isoform_ID)
+        ),
+        collapse = ";"
+      ),
+
+    PRGminer_Classes =
+      paste(
+        sort(
+          unique(Prediction)
+        ),
+        collapse = ";"
+      ),
+
+    across(
+      all_of(probability_cols),
+      max_or_na,
+      .names = "Max_{.col}"
+    ),
+
+    .groups = "drop"
+  )
+
+
+cat(
+  "Unique genes with >=1 PRGminer R-gene isoform:",
+  nrow(rga_gene_summary),
+  "\n"
+)
+
+
+write.csv(
+  rga_gene_summary,
+  file.path(
+    OUT_DIR,
+    "Vrip_X_Vrup_PRGminer_Rgene_gene_summary.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ============================================================
+# 7. Read full signed-WGCNA gene/module assignment
+# ============================================================
+
+wgcna <- read.csv(
+  WGCNA_FILE,
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+
+
+if(!all(
+  c(
+    "Gene_ID",
+    "Module_Color"
+  ) %in% colnames(wgcna)
+)) {
+
+  stop(
+    "WGCNA table must contain Gene_ID and Module_Color."
+  )
+}
+
+
+cat("\n============================================\n")
+cat("WGCNA NETWORK\n")
+cat("============================================\n")
+
+
+cat(
+  "WGCNA genes:",
+  nrow(wgcna),
+  "\n"
+)
+
+cat(
+  "Unique WGCNA genes:",
+  dplyr::n_distinct(wgcna$Gene_ID),
+  "\n"
+)
+
+
+# ============================================================
+# 8. Overlay PRGminer at GENE level onto entire WGCNA network
+#
+# This retains ALL WGCNA genes and adds PRGminer status.
+# ============================================================
+
+wgcna_rga <- wgcna %>%
+
+  left_join(
+    rga_gene_summary,
+    by = "Gene_ID"
+  ) %>%
+
+  mutate(
+
+    PRGminer_Rgene =
+      replace_na(
+        PRGminer_Rgene,
+        FALSE
+      ),
+
+    N_Rgene_Isoforms =
+      replace_na(
+        N_Rgene_Isoforms,
+        0L
+      )
+  )
+
+
+write.csv(
+  wgcna_rga,
+  file.path(
+    OUT_DIR,
+    "All_WGCNA_Genes_with_PRGminer_Status.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ============================================================
+# 9. Target-module genes
+# ============================================================
+
+target_wgcna <- wgcna_rga %>%
+
+  filter(
+    Module_Color %in%
+      target_modules
+  )
+
+
+write.csv(
+  target_wgcna,
+  file.path(
+    OUT_DIR,
+    "Target_Module_All_Genes_with_PRGminer_Status.csv"
+  ),
+  row.names = FALSE
+)
+
+
+target_rgenes <- target_wgcna %>%
+
+  filter(
+    PRGminer_Rgene
+  ) %>%
+
+  arrange(
+    Module_Color,
+    Gene_ID
+  )
+
+
+write.csv(
+  target_rgenes,
+  file.path(
+    OUT_DIR,
+    "Target_Module_PRGminer_Rgenes.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ============================================================
+# 10. Isoform-level PRGminer details for target modules
+# ============================================================
+
+target_gene_key <- target_wgcna %>%
+
+  dplyr::select(
+    Gene_ID,
+    Module_Color
+  ) %>%
+
+  distinct()
+
+
+target_rgene_isoforms <- rga_gene %>%
+
+  inner_join(
+    target_gene_key,
+    by = "Gene_ID"
+  ) %>%
+
+  arrange(
+    Module_Color,
+    Gene_ID,
+    Isoform_ID
+  )
+
+
+write.csv(
+  target_rgene_isoforms,
+  file.path(
+    OUT_DIR,
+    "Target_Module_PRGminer_Rgene_Isoforms.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ============================================================
+# 11. Read Top-50 hub table
+# ============================================================
+
+top50 <- read.csv(
+  TOP50_FILE,
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+
+
+if(!all(
+  c(
+    "Gene_ID",
+    "Module_Color",
+    "Target_Module"
+  ) %in% colnames(top50)
+)) {
+
+  stop(
+    "Top-50 hub table is missing expected columns."
+  )
+}
+
+
+# ============================================================
+# 12. Recalculate module membership and hub rank
+#
+# This mirrors what we did for the DIU/hub candidates.
+# ============================================================
+
+top50 <- top50 %>%
+
+  mutate(
+
+    Module_Membership =
+      case_when(
+
+        Target_Module == "lightcyan" ~
+          abs(
+            .data[["MM.lightcyan"]]
+          ),
+
+        Target_Module == "white" ~
+          abs(
+            .data[["MM.white"]]
+          ),
+
+        Target_Module == "midnightblue" ~
+          abs(
+            .data[["MM.midnightblue"]]
+          ),
+
+        TRUE ~ NA_real_
+      )
+  ) %>%
+
+  group_by(
+    Target_Module
+  ) %>%
+
+  arrange(
+    desc(Module_Membership),
+    .by_group = TRUE
+  ) %>%
+
+  mutate(
+    Hub_Rank_By_MM =
+      row_number()
+  ) %>%
+
+  ungroup()
+
+
+# ============================================================
+# 13. Overlay PRGminer onto ALL Top-50 hubs
+# ============================================================
+
+top50_rga <- top50 %>%
+
+  left_join(
+    rga_gene_summary,
+    by = "Gene_ID"
+  ) %>%
+
+  mutate(
+
+    PRGminer_Rgene =
+      replace_na(
+        PRGminer_Rgene,
+        FALSE
+      ),
+
+    N_Rgene_Isoforms =
+      replace_na(
+        N_Rgene_Isoforms,
+        0L
+      )
+  ) %>%
+
+  arrange(
+    Target_Module,
+    Hub_Rank_By_MM
+  )
+
+
+write.csv(
+  top50_rga,
+  file.path(
+    OUT_DIR,
+    "Top50_Hubs_with_PRGminer_Status.csv"
+  ),
+  row.names = FALSE
+)
+
+
+top50_rgenes <- top50_rga %>%
+
+  filter(
+    PRGminer_Rgene
+  )
+
+
+write.csv(
+  top50_rgenes,
+  file.path(
+    OUT_DIR,
+    "Top50_Hub_PRGminer_Rgenes.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ============================================================
+# 14. Isoform-level PRGminer details for R-gene Top-50 hubs
+# ============================================================
+
+top50_key <- top50 %>%
+
+  dplyr::select(
+    Gene_ID,
+    Module_Color,
+    Target_Module,
+    Module_Membership,
+    Hub_Rank_By_MM
+  ) %>%
+
+  distinct()
+
+
+top50_rgene_isoforms <- rga_gene %>%
+
+  inner_join(
+    top50_key,
+    by = "Gene_ID"
+  ) %>%
+
+  arrange(
+    Target_Module,
+    Hub_Rank_By_MM,
+    Gene_ID,
+    Isoform_ID
+  )
+
+
+write.csv(
+  top50_rgene_isoforms,
+  file.path(
+    OUT_DIR,
+    "Top50_Hub_PRGminer_Rgene_Isoforms.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ============================================================
+# 15. Summary by target module
+# ============================================================
+
+module_summary <- target_wgcna %>%
+
+  group_by(
+    Module_Color
+  ) %>%
+
+  summarise(
+
+    Total_Module_Genes =
+      n_distinct(Gene_ID),
+
+    PRGminer_Rgenes =
+      n_distinct(
+        Gene_ID[
+          PRGminer_Rgene
+        ]
+      ),
+
+    Percent_Rgenes =
+      100 *
+      PRGminer_Rgenes /
+      Total_Module_Genes,
+
+    .groups = "drop"
+  )
+
+
+write.csv(
+  module_summary,
+  file.path(
+    OUT_DIR,
+    "Target_Module_PRGminer_Rgene_Summary.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ============================================================
+# 16. R-gene class distribution by module
+#
+# Isoform-level because a single gene may contain transcripts
+# assigned to different PRGminer classes.
+# ============================================================
+
+class_summary <- target_rgene_isoforms %>%
+
+  distinct(
+    Module_Color,
+    Gene_ID,
+    Isoform_ID,
+    Prediction
+  ) %>%
+
+  count(
+    Module_Color,
+    Prediction,
+    name = "N_Rgene_Isoforms"
+  ) %>%
+
+  arrange(
+    Module_Color,
+    desc(N_Rgene_Isoforms)
+  )
+
+
+write.csv(
+  class_summary,
+  file.path(
+    OUT_DIR,
+    "Target_Module_PRGminer_Class_Summary.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ============================================================
+# 17. Console summary
+# ============================================================
+
+cat("\n============================================\n")
+cat("TARGET MODULE SUMMARY\n")
+cat("============================================\n")
+
+print(
+  module_summary
+)
+
+
+cat("\n============================================\n")
+cat("TOP-50 HUB SUMMARY\n")
+cat("============================================\n")
+
+cat(
+  "Top-50 hub genes total:",
+  nrow(top50),
+  "\n"
+)
+
+cat(
+  "Top-50 hubs predicted as R genes:",
+  nrow(top50_rgenes),
+  "\n"
+)
+
+
+cat("\nTop-50 R genes by module:\n")
+
+print(
+  top50_rgenes %>%
+
+    count(
+      Target_Module,
+      name = "N_Rgenes"
+    )
+)
+
+
+cat("\n============================================\n")
+cat("DONE\n")
+cat("============================================\n")
+
+cat(
+  "Output directory:\n",
+  OUT_DIR,
+  "\n"
+)
+
+
