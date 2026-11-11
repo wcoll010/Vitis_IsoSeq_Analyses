@@ -120,14 +120,6 @@ for (geno in genotypes) {
   diu_path  <- paste0(base_dir, geno, "_significant_isoform_switches.csv")
   egg_path  <- paste0(egg_dir, geno, "_eggnog.emapper.annotations")
   
-  # Bridge path logic (1616 is in shared; others are in bigdata)
-  if (geno == "1616") {
-    bridge_path <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/sqanti_results/1616_FINAL_RECOVERY_sqanti/1616_FINAL_RECOVERY_sqanti_classification.txt"
-  } else {
-    # Assuming standard path for others based on your previous messages
-    bridge_path <- paste0(base_dir, "sqanti_results/", geno, "_sqanti/filter_results/", 
-                          geno, "_filtered_RulesFilter_result_classification.txt")
-  }
 
   # B. Load Files
   if (!file.exists(diu_path) | !file.exists(bridge_path) | !file.exists(egg_path)) {
