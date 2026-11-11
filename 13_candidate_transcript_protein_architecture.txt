@@ -1,0 +1,3421 @@
+### Analyzing the isoform expression, structure, protein structure, and change in protein expression (infested minus control) of candidate genes (PAD4, EDS1, TNL, CNLs)
+
+################################################################################
+# Contains multiple script blocks/commands:
+#   - compute transcript/exon structures
+#   - predict ORFs (open reading frames)
+#   - run InterProScan to assign protein functional domains
+#   - extract longest representative ORF
+#   - compute amino-acid Protein Group assignment
+#   - compute isoform fractions and Protein Group usage
+#   - create four-panel transcript/protein figures
+################################################################################
+
+
+
+# Make master files for plotting
+
+nano /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/make_target_crossgenotype_plot_master.R
+
+#!/usr/bin/env Rscript
+
+.libPaths(c(
+    "/rhome/wcoll010/bigdata_groenlab/R_libs",
+    .libPaths()
+))
+
+suppressPackageStartupMessages({
+    library(dplyr)
+    library(tidyr)
+    library(stringr)
+})
+
+
+# ============================================================
+# 1. PATHS
+# ============================================================
+
+BASE <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+
+SQANTI_FILE <- file.path(
+    BASE,
+    "sqanti_results",
+    "Vrip_X_Vrup_sqanti",
+    "filter_results",
+    "Vrip_X_Vrup_filtered_RulesFilter_result_classification.txt"
+)
+
+
+GTF_FILE <- file.path(
+    BASE,
+    "sqanti_results",
+    "Vrip_X_Vrup_sqanti",
+    "filter_results",
+    "Vrip_X_Vrup_filtered.filtered.gtf"
+)
+
+
+COUNT_FILE <- file.path(
+    BASE,
+    "oarfish_matrices",
+    "Vrip_X_Vrup_oarfish_counts.tsv"
+)
+
+
+PRG_FILE <- file.path(
+    BASE,
+    "rga_annotations",
+    "Vrip_X_Vrup",
+    "Vrip_X_Vrup_rga_annotations.tsv"
+)
+
+
+DIU_DIR <- file.path(
+    BASE,
+    "IsoformSwitchAnalyzeR_cross_genotype",
+    "results"
+)
+
+
+OUTDIR <- file.path(
+    BASE,
+    "WGCNA_Vrip_X_Vrup",
+    "signed_network",
+    "candidate_architecture",
+    "final_multigenotype_targets"
+)
+
+
+dir.create(
+    OUTDIR,
+    recursive = TRUE,
+    showWarnings = FALSE
+)
+
+
+# ============================================================
+# 2. TARGET GENES
+# ============================================================
+
+targets <- data.frame(
+
+    Gene_ID = c(
+
+        "VITVri588271_v1.0.hap1.chr14.ver1.0.g309600",
+        "VITVri588271_v1.0.hap1.chr17.ver1.0.g351040",
+        "VITVri588271_v1.0.hap1.chr07.ver1.0.g191950",
+        "VITVrpB38_v1.0.hap1.chr14.ver1.0.g229570",
+
+        "VITVri588271_v1.0.hap1.chr08.ver1.0.g199800",
+
+        "VITVrpB38_v1.0.hap1.chr11.ver1.0.g178120",
+        "VITVrpB38_v1.0.hap1.chr07.ver1.0.g114630",
+        "VITVrpB38_v1.0.hap1.chr18.ver1.0.g289740"
+    ),
+
+    Candidate = c(
+
+        "SAG101-like",
+        "EDS1",
+        "PAD4",
+        "SAG101-related",
+
+        "WRKY transcription factor",
+
+        "CNL",
+        "CNL",
+        "TNL"
+    ),
+
+    stringsAsFactors = FALSE
+)
+
+
+target_genes <- targets$Gene_ID
+
+
+# ============================================================
+# 3. FINAL 9 DIU CONTRASTS
+# ============================================================
+
+contrasts <- c(
+    "101-14_Inf_vs_Con",
+    "3309_Inf_vs_Con",
+    "SW_Inf_vs_Con",
+    "3309C_vs_101-14C",
+    "SWC_vs_101-14C",
+    "3309C_vs_SWC",
+    "3309I_vs_101-14I",
+    "SWI_vs_101-14I",
+    "3309I_vs_SWI"
+)
+
+
+# ============================================================
+# 4. SQANTI ISOFORM -> GENE MAP
+# ============================================================
+
+sqanti <- read.delim(
+    SQANTI_FILE,
+    header = TRUE,
+    sep = "\t",
+    quote = "",
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+)
+
+
+isoform_gene <- sqanti %>%
+
+    filter(
+        filter_result == "Isoform"
+    ) %>%
+
+    transmute(
+
+        Isoform_ID =
+            as.character(
+                isoform
+            ),
+
+        Gene_ID =
+            as.character(
+                associated_gene
+            )
+    ) %>%
+
+    filter(
+        !is.na(Isoform_ID),
+        Isoform_ID != "",
+        !is.na(Gene_ID),
+        Gene_ID != ""
+    ) %>%
+
+    distinct()
+
+
+ambiguous <- isoform_gene %>%
+
+    count(
+        Isoform_ID,
+        name = "N_Genes"
+    ) %>%
+
+    filter(
+        N_Genes > 1
+    )
+
+
+if (nrow(ambiguous) > 0) {
+
+    stop(
+        "Some exact SQANTI isoforms map to >1 Gene_ID."
+    )
+}
+
+
+# ============================================================
+# 5. EXTRACT ALL ISOFORMS BELONGING TO TARGET GENES
+# ============================================================
+
+target_isoforms <- isoform_gene %>%
+
+    filter(
+        Gene_ID %in%
+        target_genes
+    )
+
+
+cat(
+    "\nTarget genes:",
+    n_distinct(target_isoforms$Gene_ID),
+    "\n"
+)
+
+
+cat(
+    "Total SQANTI isoforms assigned to target genes:",
+    n_distinct(target_isoforms$Isoform_ID),
+    "\n"
+)
+
+
+print(
+    target_isoforms %>%
+        count(
+            Gene_ID,
+            name = "N_Isoforms"
+        ) %>%
+        arrange(
+            Gene_ID
+        )
+)
+
+
+# ============================================================
+# 6. READ RAW OARFISH COUNTS
+# ============================================================
+
+counts <- read.delim(
+    COUNT_FILE,
+    header = TRUE,
+    sep = "\t",
+    quote = "",
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+)
+
+
+if (!"isoform" %in% colnames(counts)) {
+
+    stop(
+        "Oarfish count file does not contain column 'isoform'."
+    )
+}
+
+
+sample_cols <- setdiff(
+    colnames(counts),
+    "isoform"
+)
+
+
+# ============================================================
+# 7. KEEP TARGET ISOFORMS ONLY
+# ============================================================
+
+target_counts <- counts %>%
+
+    rename(
+        Isoform_ID =
+            isoform
+    ) %>%
+
+    inner_join(
+        target_isoforms,
+        by = "Isoform_ID"
+    )
+
+
+# ============================================================
+# 8. LONG FORMAT
+# ============================================================
+
+long <- target_counts %>%
+
+    pivot_longer(
+
+        cols =
+            all_of(
+                sample_cols
+            ),
+
+        names_to =
+            "Sample",
+
+        values_to =
+            "Count"
+    ) %>%
+
+    mutate(
+
+        Count =
+            as.numeric(
+                Count
+            ),
+
+        Genotype =
+            case_when(
+
+                grepl(
+                    "^101-14_",
+                    Sample
+                ) ~
+                    "101-14",
+
+                grepl(
+                    "^3309_",
+                    Sample
+                ) ~
+                    "3309",
+
+                grepl(
+                    "^sw_",
+                    Sample,
+                    ignore.case = TRUE
+                ) ~
+                    "SW",
+
+                TRUE ~
+                    NA_character_
+            ),
+
+        Treatment =
+            case_when(
+
+                grepl(
+                    "_con_",
+                    Sample,
+                    ignore.case = TRUE
+                ) ~
+                    "Control",
+
+                grepl(
+                    "_inf_",
+                    Sample,
+                    ignore.case = TRUE
+                ) ~
+                    "Infested",
+
+                TRUE ~
+                    NA_character_
+            )
+    ) %>%
+
+    filter(
+        !is.na(Genotype),
+        !is.na(Treatment)
+    )
+
+
+cat("\nSample classification:\n")
+
+print(
+    long %>%
+        distinct(
+            Sample,
+            Genotype,
+            Treatment
+        ) %>%
+        count(
+            Genotype,
+            Treatment
+        )
+)
+
+
+# ============================================================
+# 9. COMPUTE ISOFORM FRACTION WITHIN EACH GENE / SAMPLE
+# ============================================================
+
+long <- long %>%
+
+    group_by(
+        Gene_ID,
+        Sample
+    ) %>%
+
+    mutate(
+
+        Gene_Total =
+            sum(
+                Count,
+                na.rm = TRUE
+            ),
+
+        Isoform_Fraction =
+            ifelse(
+                Gene_Total > 0,
+                Count / Gene_Total,
+                NA_real_
+            )
+    ) %>%
+
+    ungroup()
+
+
+# ============================================================
+# 10. COMPUTE MEAN ISOFORM FRACTIONS FOR SIX GENOTYPE × TREATMENT GROUPS
+# ============================================================
+
+mean_if <- long %>%
+
+    group_by(
+        Gene_ID,
+        Isoform_ID,
+        Genotype,
+        Treatment
+    ) %>%
+
+    summarise(
+
+        Mean_IF =
+            if (
+                all(
+                    is.na(
+                        Isoform_Fraction
+                    )
+                )
+            ) {
+
+                NA_real_
+
+            } else {
+
+                mean(
+                    Isoform_Fraction,
+                    na.rm = TRUE
+                )
+            },
+
+        .groups = "drop"
+    ) %>%
+
+    mutate(
+
+        Group =
+            paste(
+                Genotype,
+                Treatment,
+                sep = "_"
+            )
+    ) %>%
+
+    dplyr::select(
+        Gene_ID,
+        Isoform_ID,
+        Group,
+        Mean_IF
+    ) %>%
+
+    pivot_wider(
+        names_from =
+            Group,
+        values_from =
+            Mean_IF
+    )
+
+
+required_groups <- c(
+    "101-14_Control",
+    "101-14_Infested",
+    "3309_Control",
+    "3309_Infested",
+    "SW_Control",
+    "SW_Infested"
+)
+
+
+for (x in required_groups) {
+
+    if (!x %in% colnames(mean_if)) {
+
+        mean_if[[x]] <- NA_real_
+    }
+}
+
+
+# ============================================================
+# 11. EXTRACT SIGNIFICANT ISOFORMS FROM ANY OF 9 FINAL CONTRASTS
+# ============================================================
+
+sig_list <- list()
+
+
+for (contrast in contrasts) {
+
+    f <- file.path(
+        DIU_DIR,
+        contrast,
+        paste0(
+            contrast,
+            "_significant_switching_isoforms.csv"
+        )
+    )
+
+
+    if (!file.exists(f)) {
+
+        stop(
+            "Missing DIU file:\n",
+            f
+        )
+    }
+
+
+    x <- read.csv(
+        f,
+        stringsAsFactors = FALSE,
+        check.names = FALSE
+    )
+
+
+    sig_list[[contrast]] <- x %>%
+
+        transmute(
+
+            Contrast =
+                contrast,
+
+            Isoform_ID =
+                as.character(
+                    isoform_id
+                )
+        )
+}
+
+
+sig_all <- bind_rows(
+    sig_list
+)
+
+
+sig_summary <- sig_all %>%
+
+    filter(
+        Isoform_ID %in%
+        target_isoforms$Isoform_ID
+    ) %>%
+
+    group_by(
+        Isoform_ID
+    ) %>%
+
+    summarise(
+
+        Significant_Any_Contrast =
+            TRUE,
+
+        N_Significant_Contrasts =
+            n_distinct(
+                Contrast
+            ),
+
+        Significant_Contrasts =
+            paste(
+                contrasts[
+                    contrasts %in%
+                    unique(
+                        Contrast
+                    )
+                ],
+                collapse = " | "
+            ),
+
+        .groups = "drop"
+    )
+
+
+# ============================================================
+# 12. READ IN R GENE ASSIGNMENTS / PRGMINER ISOFORM CLASSIFICATION
+# ============================================================
+
+prg <- read.delim(
+    PRG_FILE,
+    header = TRUE,
+    sep = "\t",
+    quote = "",
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+) %>%
+
+    transmute(
+
+        Isoform_ID =
+            as.character(
+                SampleID
+            ),
+
+        PRGminer_Class =
+            as.character(
+                Prediction
+            )
+    ) %>%
+
+    filter(
+        PRGminer_Class !=
+            "Non-Rgene"
+    ) %>%
+
+    distinct(
+        Isoform_ID,
+        .keep_all = TRUE
+    )
+
+
+# ============================================================
+# 13. BUILD FINAL PLOTTING MASTER
+# ============================================================
+
+master <- target_isoforms %>%
+
+    left_join(
+        mean_if,
+        by = c(
+            "Gene_ID",
+            "Isoform_ID"
+        )
+    ) %>%
+
+    left_join(
+        sig_summary,
+        by = "Isoform_ID"
+    ) %>%
+
+    left_join(
+        prg,
+        by = "Isoform_ID"
+    ) %>%
+
+    left_join(
+        targets,
+        by = "Gene_ID"
+    ) %>%
+
+    mutate(
+
+        Significant_Any_Contrast =
+            replace_na(
+                Significant_Any_Contrast,
+                FALSE
+            ),
+
+        N_Significant_Contrasts =
+            replace_na(
+                N_Significant_Contrasts,
+                0L
+            ),
+
+        Significant_Contrasts =
+            replace_na(
+                Significant_Contrasts,
+                ""
+            ),
+
+        PRGminer_Class =
+            replace_na(
+                PRGminer_Class,
+                ""
+            )
+    )
+
+
+# ============================================================
+# 14. READ EXONS FROM SQANTI GTF
+# ============================================================
+
+gtf <- read.delim(
+    GTF_FILE,
+    header = FALSE,
+    sep = "\t",
+    quote = "",
+    comment.char = "#",
+    stringsAsFactors = FALSE
+)
+
+
+colnames(gtf) <- c(
+    "seqname",
+    "source",
+    "feature",
+    "start",
+    "end",
+    "score",
+    "strand",
+    "frame",
+    "attribute"
+)
+
+
+gtf$Isoform_ID <- str_match(
+    gtf$attribute,
+    'transcript_id "([^"]+)"'
+)[, 2]
+
+
+exons <- gtf %>%
+
+    filter(
+        feature == "exon",
+        Isoform_ID %in%
+            target_isoforms$Isoform_ID
+    ) %>%
+
+    dplyr::select(
+        Isoform_ID,
+        seqname,
+        strand,
+        start,
+        end
+    )
+
+
+# ============================================================
+# 15. SAVE
+# ============================================================
+
+write.csv(
+    master,
+    file.path(
+        OUTDIR,
+        "Target_Genes_All_Isoforms_CrossGenotype_Master.csv"
+    ),
+    row.names = FALSE
+)
+
+
+write.csv(
+    exons,
+    file.path(
+        OUTDIR,
+        "Target_Genes_All_Isoforms_Exons.csv"
+    ),
+    row.names = FALSE
+)
+
+
+writeLines(
+    sort(
+        unique(
+            master$Isoform_ID
+        )
+    ),
+    file.path(
+        OUTDIR,
+        "Target_Genes_All_PB_Isoforms.txt"
+    )
+)
+
+
+cat("\n")
+cat("====================================================\n")
+cat("MASTER COMPLETE\n")
+cat("====================================================\n")
+
+
+cat(
+    "Genes:",
+    n_distinct(
+        master$Gene_ID
+    ),
+    "\n"
+)
+
+
+cat(
+    "Total unique PB isoforms:",
+    n_distinct(
+        master$Isoform_ID
+    ),
+    "\n"
+)
+
+
+cat(
+    "Isoforms significant in >=1 final contrast:",
+    sum(
+        master$Significant_Any_Contrast
+    ),
+    "\n"
+)
+
+
+cat("\nIsoforms by gene:\n")
+
+print(
+    master %>%
+        count(
+            Candidate,
+            Gene_ID,
+            name = "N_Isoforms"
+        )
+)
+
+
+cat("\nOutput directory:\n")
+cat(
+    OUTDIR,
+    "\n"
+)
+
+
+
+
+
+
+
+
+
+
+
+ 
+### Step 2 — extract predicted proteins for exactly those PB isoforms
+
+nano /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/extract_target_plot_proteins.py
+
+#!/usr/bin/env python3
+
+from pathlib import Path
+import re
+
+
+BASE = Path(
+    "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+)
+
+
+OUTDIR = (
+    BASE
+    / "WGCNA_Vrip_X_Vrup"
+    / "signed_network"
+    / "candidate_architecture"
+    / "final_multigenotype_targets"
+)
+
+
+ID_FILE = (
+    OUTDIR
+    / "Target_Genes_All_PB_Isoforms.txt"
+)
+
+
+PROTEIN_FASTA = (
+    BASE
+    / "eggnog_input"
+    / "Vrip_X_Vrup_filtered_proteins.faa"
+)
+
+
+OUT_FASTA = (
+    OUTDIR
+    / "Target_Genes_All_Predicted_ORFs.faa"
+)
+
+
+ORF_MAP = (
+    OUTDIR
+    / "Target_Genes_ORF_Map.tsv"
+)
+
+
+target_ids = {
+    x.strip()
+    for x in ID_FILE.read_text().splitlines()
+    if x.strip()
+}
+
+
+print(
+    "Target PB isoforms:",
+    len(target_ids)
+)
+
+
+def fasta_records(path):
+
+    header = None
+    seq = []
+
+    with open(path) as fh:
+
+        for line in fh:
+
+            line = line.rstrip("\n")
+
+            if line.startswith(">"):
+
+                if header is not None:
+                    yield header, "".join(seq)
+
+                header = line[1:]
+                seq = []
+
+            else:
+
+                seq.append(
+                    line.strip()
+                )
+
+        if header is not None:
+
+            yield header, "".join(seq)
+
+
+records = []
+found_isoforms = set()
+
+
+with open(
+    OUT_FASTA,
+    "w"
+) as fasta_out:
+
+    for header, seq in fasta_records(
+        PROTEIN_FASTA
+    ):
+
+        parts = re.split(
+            r"\s+",
+            header,
+            maxsplit=1
+        )
+
+
+        if len(parts) < 2:
+            continue
+
+
+        isoform_id = parts[0]
+
+
+        if isoform_id not in target_ids:
+            continue
+
+
+        orf_info = parts[1].split("|")
+
+
+        if len(orf_info) < 5:
+            continue
+
+
+        protein_id = orf_info[0]
+
+        protein_length = int(
+            orf_info[1]
+            .replace(
+                "_aa",
+                ""
+            )
+        )
+
+        strand = orf_info[2]
+
+        cds_start = int(
+            float(
+                orf_info[3]
+            )
+        )
+
+        cds_end = int(
+            float(
+                orf_info[4]
+            )
+        )
+
+
+        seq = seq.rstrip("*")
+
+
+        fasta_out.write(
+            f">{protein_id}\n"
+        )
+
+        fasta_out.write(
+            f"{seq}\n"
+        )
+
+
+        records.append(
+            (
+                isoform_id,
+                protein_id,
+                protein_length,
+                strand,
+                cds_start,
+                cds_end
+            )
+        )
+
+
+        found_isoforms.add(
+            isoform_id
+        )
+
+
+with open(
+    ORF_MAP,
+    "w"
+) as out:
+
+    out.write(
+        "Isoform_ID\t"
+        "Protein_ID\t"
+        "Protein_Length_aa\t"
+        "ORF_Strand\t"
+        "CDS_Start_nt\t"
+        "CDS_End_nt\n"
+    )
+
+    for row in records:
+
+        out.write(
+            "\t".join(
+                map(
+                    str,
+                    row
+                )
+            )
+            + "\n"
+        )
+
+
+missing = sorted(
+    target_ids -
+    found_isoforms
+)
+
+
+print(
+    "Predicted ORF records:",
+    len(records)
+)
+
+
+print(
+    "Isoforms with >=1 predicted ORF:",
+    len(found_isoforms)
+)
+
+
+print(
+    "Isoforms without predicted ORF:",
+    len(missing)
+)
+
+
+if missing:
+
+    print(
+        "\nIsoforms without predicted protein:"
+    )
+
+    for x in missing:
+
+        print(
+            " ",
+            x
+        )
+
+
+print(
+    "\nProtein FASTA:",
+    OUT_FASTA
+)
+
+
+print(
+    "ORF map:",
+    ORF_MAP
+)
+
+
+# run python script 
+
+python /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/extract_target_plot_proteins.py
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Step 3: interpro scan
+
+nano /rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/run_target_plot_interproscan.sh
+
+
+
+#!/bin/bash
+#SBATCH --job-name="Target_IPR"
+#SBATCH --output=/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2/logs/Target_IPR_%j.out
+#SBATCH --time=02:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=80G
+#SBATCH --mail-user=wcoll010@ucr.edu
+#SBATCH --mail-type=ALL
+
+
+module load interproscan/5.76-107.0
+
+
+BASE="/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+DIR="${BASE}/WGCNA_Vrip_X_Vrup/signed_network/candidate_architecture/final_multigenotype_targets"
+
+
+INPUT="${DIR}/Target_Genes_All_Predicted_ORFs.faa"
+
+OUTPUT="${DIR}/Target_Genes_InterProScan.tsv"
+
+
+interproscan.sh \
+    -i "$INPUT" \
+    -f TSV \
+    -o "$OUTPUT" \
+    -cpu 4 \
+    -goterms \
+    -iprlookup \
+    -pa
+
+
+# Submitted batch job 29002608
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Last step: merge data and create summary plots 
+
+
+#!/usr/bin/env Rscript
+
+.libPaths(c(
+    "/rhome/wcoll010/bigdata_groenlab/R_libs",
+    .libPaths()
+))
+
+suppressPackageStartupMessages({
+    library(dplyr)
+    library(tidyr)
+    library(stringr)
+    library(ggplot2)
+    library(patchwork)
+})
+
+
+# ============================================================
+# 1. PATHS
+# ============================================================
+
+BASE <- "/rhome/wcoll010/shared/pacbio/IsoSeq_analyses_2"
+
+
+OUTDIR <- file.path(
+    BASE,
+    "WGCNA_Vrip_X_Vrup",
+    "signed_network",
+    "candidate_architecture",
+    "final_multigenotype_targets"
+)
+
+
+MASTER_FILE <- file.path(
+    OUTDIR,
+    "Target_Genes_All_Isoforms_CrossGenotype_Master.csv"
+)
+
+
+EXON_FILE <- file.path(
+    OUTDIR,
+    "Target_Genes_All_Isoforms_Exons.csv"
+)
+
+
+ORF_MAP_FILE <- file.path(
+    OUTDIR,
+    "Target_Genes_ORF_Map.tsv"
+)
+
+
+PROTEIN_FASTA <- file.path(
+    OUTDIR,
+    "Target_Genes_All_Predicted_ORFs.faa"
+)
+
+
+IPR_FILE <- file.path(
+    OUTDIR,
+    "Target_Genes_InterProScan.tsv"
+)
+
+
+PLOT_DIR <- file.path(
+    OUTDIR,
+    "plots"
+)
+
+
+dir.create(
+    PLOT_DIR,
+    recursive = TRUE,
+    showWarnings = FALSE
+)
+
+
+required_files <- c(
+    MASTER_FILE,
+    EXON_FILE,
+    ORF_MAP_FILE,
+    PROTEIN_FASTA,
+    IPR_FILE
+)
+
+
+missing_files <- required_files[
+    !file.exists(required_files)
+]
+
+
+if (length(missing_files) > 0) {
+
+    stop(
+        "Missing required file(s):\n",
+        paste(
+            missing_files,
+            collapse = "\n"
+        )
+    )
+}
+
+
+# ============================================================
+# DISPLAY FILTER: Plot an isoform if it reaches at least 10% mean isoform fraction in ANY of the six genotype x treatment groups.
+# ============================================================
+
+MIN_PLOT_IF <- 0.10
+
+
+# ============================================================
+# 2. READ INPUTS
+# ============================================================
+
+master <- read.csv(
+    MASTER_FILE,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+)
+
+
+exons <- read.csv(
+    EXON_FILE,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+)
+
+
+orf_map <- read.delim(
+    ORF_MAP_FILE,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+)
+
+
+cat(
+    "\nMaster rows:",
+    nrow(master),
+    "\n"
+)
+
+
+cat(
+    "Unique genes:",
+    n_distinct(master$Gene_ID),
+    "\n"
+)
+
+
+cat(
+    "Unique isoforms:",
+    n_distinct(master$Isoform_ID),
+    "\n"
+)
+
+
+cat(
+    "Plotting threshold: mean IF >=",
+    MIN_PLOT_IF,
+    "in at least one genotype x treatment group\n\n"
+)
+
+
+# ============================================================
+# 3. READ PROTEIN FASTA
+# ============================================================
+
+read_fasta_simple <- function(file) {
+
+    x <- readLines(file)
+
+    headers <- which(
+        startsWith(
+            x,
+            ">"
+        )
+    )
+
+    out <- vector(
+        "list",
+        length(headers)
+    )
+
+    for (i in seq_along(headers)) {
+
+        start <- headers[i]
+
+        end <- if (
+            i < length(headers)
+        ) {
+
+            headers[i + 1] - 1
+
+        } else {
+
+            length(x)
+        }
+
+
+        protein_id <- sub(
+            "^>",
+            "",
+            x[start]
+        )
+
+
+        seq_lines <- if (
+            end > start
+        ) {
+
+            x[
+                (start + 1):end
+            ]
+
+        } else {
+
+            character(0)
+        }
+
+
+        seq_string <- paste0(
+            seq_lines,
+            collapse = ""
+        )
+
+
+        seq_string <- gsub(
+            "\\*",
+            "",
+            seq_string
+        )
+
+
+        out[[i]] <- data.frame(
+
+            Protein_ID =
+                protein_id,
+
+            Protein_Sequence =
+                seq_string,
+
+            Sequence_Length =
+                nchar(
+                    seq_string
+                ),
+
+            stringsAsFactors =
+                FALSE
+        )
+    }
+
+
+    bind_rows(
+        out
+    )
+}
+
+
+proteins <- read_fasta_simple(
+    PROTEIN_FASTA
+)
+
+
+cat(
+    "Protein records:",
+    nrow(proteins),
+    "\n"
+)
+
+
+# ============================================================
+# 4. NUMBER OF ORFS PER ISOFORM
+# ============================================================
+
+orf_map <- orf_map %>%
+
+    group_by(
+        Isoform_ID
+    ) %>%
+
+    mutate(
+
+        N_Predicted_ORFs =
+            n()
+    ) %>%
+
+    ungroup()
+
+
+# ============================================================
+# 5. REPRESENTATIVE ORF
+# Same rule as before: longest predicted ORF for visualization.
+# ============================================================
+
+representative_orf <- orf_map %>%
+
+    arrange(
+        Isoform_ID,
+        desc(
+            Protein_Length_aa
+        ),
+        Protein_ID
+    ) %>%
+
+    group_by(
+        Isoform_ID
+    ) %>%
+
+    slice_head(
+        n = 1
+    ) %>%
+
+    ungroup() %>%
+
+    left_join(
+        proteins,
+        by = "Protein_ID"
+    )
+
+
+cat(
+    "Representative predicted ORFs:",
+    nrow(representative_orf),
+    "\n"
+)
+
+
+# ============================================================
+# 6. ASSIGN IDENTICAL PROTEINS TO PROTEIN GROUPS
+# ============================================================
+
+make_letters <- function(n) {
+
+    if (n <= 26) {
+
+        return(
+            LETTERS[
+                seq_len(n)
+            ]
+        )
+    }
+
+
+    paste0(
+        "P",
+        seq_len(n)
+    )
+}
+
+
+protein_groups <- representative_orf %>%
+
+    left_join(
+
+        master %>%
+
+            dplyr::select(
+                Gene_ID,
+                Isoform_ID
+            ) %>%
+
+            distinct(),
+
+        by = "Isoform_ID"
+    ) %>%
+
+    group_by(
+        Gene_ID
+    ) %>%
+
+    group_modify(
+        ~ {
+
+            x <- .x
+
+
+            valid_seq <- (
+                !is.na(
+                    x$Protein_Sequence
+                ) &
+                x$Protein_Sequence != ""
+            )
+
+
+            x$Protein_Group <- NA_character_
+
+
+            if (any(valid_seq)) {
+
+                unique_sequences <- unique(
+                    x$Protein_Sequence[
+                        valid_seq
+                    ]
+                )
+
+
+                letters_here <- make_letters(
+                    length(
+                        unique_sequences
+                    )
+                )
+
+
+                x$Protein_Group[
+                    valid_seq
+                ] <- paste(
+                    "Protein",
+                    letters_here[
+                        match(
+                            x$Protein_Sequence[
+                                valid_seq
+                            ],
+                            unique_sequences
+                        )
+                    ]
+                )
+            }
+
+
+            x
+        }
+    ) %>%
+
+    ungroup()
+
+
+# ============================================================
+# 7. ADD PROTEIN INFO TO MASTER
+# ============================================================
+
+master <- master %>%
+
+    left_join(
+
+        protein_groups %>%
+
+            dplyr::select(
+                Gene_ID,
+                Isoform_ID,
+                Protein_ID,
+                Protein_Length_aa,
+                N_Predicted_ORFs,
+                Protein_Sequence,
+                Protein_Group
+            ),
+
+        by = c(
+            "Gene_ID",
+            "Isoform_ID"
+        )
+    )
+
+
+# ============================================================
+# 8. READ INTERPROSCAN TSV
+# ============================================================
+
+ipr_names <- c(
+    "Protein_ID",
+    "MD5",
+    "Protein_Length_IPR",
+    "Analysis",
+    "Signature_Accession",
+    "Signature_Description",
+    "Domain_Start",
+    "Domain_End",
+    "Score",
+    "Status",
+    "Date",
+    "InterPro_Accession",
+    "InterPro_Description",
+    "GO",
+    "Pathway"
+)
+
+
+ipr <- read.delim(
+    IPR_FILE,
+    header = FALSE,
+    sep = "\t",
+    quote = "",
+    fill = TRUE,
+    stringsAsFactors = FALSE,
+    check.names = FALSE,
+    comment.char = ""
+)
+
+
+if (ncol(ipr) < length(ipr_names)) {
+
+    for (
+        i in
+        (ncol(ipr) + 1):
+        length(ipr_names)
+    ) {
+
+        ipr[[i]] <- NA_character_
+    }
+}
+
+
+ipr <- ipr[
+    ,
+    seq_along(
+        ipr_names
+    ),
+    drop = FALSE
+]
+
+
+colnames(
+    ipr
+) <- ipr_names
+
+
+# ============================================================
+# 9. PFAM DOMAIN ANNOTATIONS
+
+# Keeps the complete InterPro/Pfam annotation in a CSV
+# For the FIGURE ONLY, use short biologically readable domain names, eg LRR, NB-ARC
+# ============================================================
+
+pfam_full <- ipr %>%
+
+    filter(
+        Analysis == "Pfam"
+    ) %>%
+
+    mutate(
+
+        Domain_Start =
+            as.numeric(
+                Domain_Start
+            ),
+
+        Domain_End =
+            as.numeric(
+                Domain_End
+            ),
+
+        Full_Domain_Annotation =
+            case_when(
+
+                !is.na(
+                    InterPro_Description
+                ) &
+                    InterPro_Description != "-" &
+                    InterPro_Description != "" ~
+
+                    InterPro_Description,
+
+                TRUE ~
+
+                    Signature_Description
+            )
+    ) %>%
+
+    distinct(
+        Protein_ID,
+        Signature_Accession,
+        Signature_Description,
+        InterPro_Accession,
+        InterPro_Description,
+        Full_Domain_Annotation,
+        Domain_Start,
+        Domain_End
+    )
+
+
+# ------------------------------------------------------------
+# Save the full domain annotation
+# ------------------------------------------------------------
+
+write.csv(
+    pfam_full,
+    file.path(
+        PLOT_DIR,
+        "Target_Genes_Full_Pfam_InterPro_Annotations.csv"
+    ),
+    row.names = FALSE
+)
+
+
+# ============================================================
+# 9A. SHORT DOMAIN LABELS FOR FIGURES
+# ============================================================
+
+short_domain_label <- function(
+    full_annotation,
+    signature_description
+) {
+
+    x <- paste(
+        full_annotation,
+        signature_description
+    )
+
+
+    case_when(
+
+        # NB-ARC nucleotide-binding domain
+        str_detect(
+            x,
+            regex(
+                "NB[- ]?ARC",
+                ignore_case = TRUE
+            )
+        ) ~
+
+            "NB-ARC",
+
+
+        # Winged-helix domain
+        str_detect(
+            x,
+            regex(
+                "winged.?helix",
+                ignore_case = TRUE
+            )
+        ) ~
+
+            "WHD",
+
+
+        # TIR domain
+        str_detect(
+            x,
+            regex(
+                "Toll/interleukin|TIR domain|TIR[-_ ]",
+                ignore_case = TRUE
+            )
+        ) ~
+
+            "TIR",
+
+
+        # Leucine-rich repeat domains
+        str_detect(
+            x,
+            regex(
+                "leucine.?rich repeat|LRR",
+                ignore_case = TRUE
+            )
+        ) ~
+
+            "LRR",
+
+
+        # WRKY DNA-binding domain
+        str_detect(
+            x,
+            regex(
+                "WRKY",
+                ignore_case = TRUE
+            )
+        ) ~
+
+            "WRKY",
+
+
+        # EDS1 / EP domain
+        str_detect(
+            x,
+            regex(
+                "EDS1.*EP|EP domain",
+                ignore_case = TRUE
+            )
+        ) ~
+
+            "EDS1/EP",
+
+
+        # Fungal-lipase-like domain
+        str_detect(
+            x,
+            regex(
+                "fungal lipase",
+                ignore_case = TRUE
+            )
+        ) ~
+
+            "Lipase-like",
+
+
+        # Wall-associated kinase / galacturonan binding
+        str_detect(
+            x,
+            regex(
+                "wall.?associated.*galacturonan|WAK.*binding|GUB_WAK",
+                ignore_case = TRUE
+            )
+        ) ~
+
+            "WAK/GUB",
+
+
+        # Protein kinase domain
+        str_detect(
+            x,
+            regex(
+                "protein kinase|Pkinase",
+                ignore_case = TRUE
+            )
+        ) ~
+
+            "Kinase",
+
+
+        # RPW8
+        str_detect(
+            x,
+            regex(
+                "RPW8",
+                ignore_case = TRUE
+            )
+        ) ~
+
+            "RPW8",
+
+
+        # Heavy-metal associated domain
+        str_detect(
+            x,
+            regex(
+                "heavy.?metal|HMA",
+                ignore_case = TRUE
+            )
+        ) ~
+
+            "HMA",
+
+
+        # C-JID
+        str_detect(
+            x,
+            regex(
+                "C-JID",
+                ignore_case = TRUE
+            )
+        ) ~
+
+            "C-JID",
+
+
+        # SBP
+        str_detect(
+            x,
+            regex(
+                "SBP",
+                ignore_case = TRUE
+            )
+        ) ~
+
+            "SBP",
+
+
+        # Peptidase C48
+        str_detect(
+            x,
+            regex(
+                "Peptidase[_ -]?C48",
+                ignore_case = TRUE
+            )
+        ) ~
+
+            "Peptidase C48",
+
+
+        # NAP
+        str_detect(
+            x,
+            regex(
+                "\\bNAP\\b",
+                ignore_case = TRUE
+            )
+        ) ~
+
+            "NAP",
+
+
+        # If nothing above matches, retain the underlying
+        # Pfam signature description rather than the longer
+        # InterPro description.
+        !is.na(
+            signature_description
+        ) &
+            signature_description != "" &
+            signature_description != "-" ~
+
+            signature_description,
+
+
+        TRUE ~
+
+            full_annotation
+    )
+}
+
+
+pfam <- pfam_full %>%
+
+    mutate(
+
+        Domain_Label =
+            short_domain_label(
+                Full_Domain_Annotation,
+                Signature_Description
+            )
+    ) %>%
+
+    distinct(
+        Protein_ID,
+        Signature_Accession,
+        Domain_Label,
+        Domain_Start,
+        Domain_End
+    )
+
+
+cat(
+    "Pfam hits:",
+    nrow(pfam),
+    "\n"
+)
+
+
+cat(
+    "Short figure domain labels:\n",
+    paste(
+        sort(
+            unique(
+                pfam$Domain_Label
+            )
+        ),
+        collapse = " | "
+    ),
+    "\n\n"
+)
+
+
+# Save the exact mapping between full annotations
+# and the short labels used in the figure.
+
+domain_label_map <- pfam_full %>%
+
+    mutate(
+
+        Domain_Label =
+            short_domain_label(
+                Full_Domain_Annotation,
+                Signature_Description
+            )
+    ) %>%
+
+    dplyr::select(
+        Signature_Accession,
+        Signature_Description,
+        InterPro_Accession,
+        InterPro_Description,
+        Full_Domain_Annotation,
+        Domain_Label
+    ) %>%
+
+    distinct() %>%
+
+    arrange(
+        Domain_Label,
+        Signature_Accession
+    )
+
+
+write.csv(
+    domain_label_map,
+    file.path(
+        PLOT_DIR,
+        "Target_Genes_Domain_Label_Map.csv"
+    ),
+    row.names = FALSE
+)
+
+
+# ============================================================
+# 10. HELPERS
+# ============================================================
+
+safe_name <- function(x) {
+
+    gsub(
+        "[^A-Za-z0-9_.-]",
+        "_",
+        x
+    )
+}
+
+
+protein_group_order <- function(x) {
+
+    label <- sub(
+        "^Protein ",
+        "",
+        x
+    )
+
+
+    number <- match(
+        label,
+        LETTERS
+    )
+
+
+    ifelse(
+        is.na(number),
+        999,
+        number
+    )
+}
+
+
+# ============================================================
+# 11. MAKING FOUR-PANEL PLOTS FOR CANDIDATE GENES
+#=============================================================
+
+make_candidate_plot <- function(gene_id) {
+
+
+    # --------------------------------------------------------
+    # A. Gene data
+    # --------------------------------------------------------
+
+    dat_all <- master %>%
+
+        filter(
+            Gene_ID == gene_id
+        ) %>%
+
+        distinct(
+            Isoform_ID,
+            .keep_all = TRUE
+        )
+
+
+    if (nrow(dat_all) == 0) {
+
+        stop(
+            "No rows found for ",
+            gene_id
+        )
+    }
+
+
+    # --------------------------------------------------------
+    # DISPLAY FILTER
+    # --------------------------------------------------------
+
+    dat <- dat_all %>%
+
+        rowwise() %>%
+
+        mutate(
+
+            Max_Mean_IF =
+                max(
+                    c(
+                        `101-14_Control`,
+                        `101-14_Infested`,
+                        `3309_Control`,
+                        `3309_Infested`,
+                        SW_Control,
+                        SW_Infested
+                    ),
+                    na.rm = TRUE
+                )
+        ) %>%
+
+        ungroup() %>%
+
+        filter(
+            is.finite(
+                Max_Mean_IF
+            ),
+            Max_Mean_IF >=
+                MIN_PLOT_IF
+        )
+
+
+    cat(
+        gene_id,
+        ": plotting ",
+        nrow(dat),
+        " of ",
+        nrow(dat_all),
+        " isoforms at IF >= ",
+        MIN_PLOT_IF,
+        "\n",
+        sep = ""
+    )
+
+
+    if (nrow(dat) == 0) {
+
+        warning(
+            gene_id,
+            " has no isoforms passing the plotting threshold."
+        )
+
+        return(NULL)
+    }
+
+
+    # --------------------------------------------------------
+    # Candidate name
+    # --------------------------------------------------------
+
+    candidate_name <- unique(
+        dat$Candidate
+    )
+
+
+    candidate_name <- candidate_name[
+        !is.na(candidate_name) &
+        candidate_name != ""
+    ]
+
+
+    if (length(candidate_name) == 0) {
+
+        candidate_name <- gene_id
+
+    } else {
+
+        candidate_name <- candidate_name[1]
+    }
+
+
+    # --------------------------------------------------------
+    # B. Order isoforms
+    #
+    # Same approach as previous cross-genotype figure: highest resistant infestation usage at top.
+    # --------------------------------------------------------
+
+    dat <- dat %>%
+
+        mutate(
+
+            Resistant_Infested_Mean =
+                rowMeans(
+                    cbind(
+                        `3309_Infested`,
+                        SW_Infested
+                    ),
+                    na.rm = TRUE
+                ),
+
+
+            Isoform_Label =
+                paste0(
+
+                    Isoform_ID,
+
+                    ifelse(
+                        Significant_Any_Contrast,
+                        " *",
+                        ""
+                    ),
+
+                    ifelse(
+                        !is.na(PRGminer_Class) &
+                            PRGminer_Class != "",
+
+                        paste0(
+                            " [",
+                            PRGminer_Class,
+                            "]"
+                        ),
+
+                        ""
+                    )
+                )
+        ) %>%
+
+        arrange(
+            desc(
+                Resistant_Infested_Mean
+            ),
+            Isoform_ID
+        ) %>%
+
+        mutate(
+
+            y_pos =
+                rev(
+                    seq_len(
+                        n()
+                    )
+                )
+        )
+
+
+    y_lookup <- dat %>%
+
+        dplyr::select(
+            Isoform_ID,
+            y_pos
+        )
+
+
+    # ========================================================
+    # PANEL 1 — ISOFORM USAGE
+    # ========================================================
+
+    heat <- dat %>%
+
+        dplyr::select(
+            Isoform_ID,
+            y_pos,
+            `101-14_Control`,
+            `101-14_Infested`,
+            `3309_Control`,
+            `3309_Infested`,
+            SW_Control,
+            SW_Infested
+        ) %>%
+
+        pivot_longer(
+
+            cols = c(
+                `101-14_Control`,
+                `101-14_Infested`,
+                `3309_Control`,
+                `3309_Infested`,
+                SW_Control,
+                SW_Infested
+            ),
+
+            names_to =
+                "Group",
+
+            values_to =
+                "Isoform_Fraction"
+        ) %>%
+
+        mutate(
+
+            Group =
+                factor(
+
+                    Group,
+
+                    levels = c(
+                        "101-14_Control",
+                        "101-14_Infested",
+                        "3309_Control",
+                        "3309_Infested",
+                        "SW_Control",
+                        "SW_Infested"
+                    ),
+
+                    labels = c(
+                        "101-14\nControl",
+                        "101-14\nInfested",
+                        "3309\nControl",
+                        "3309\nInfested",
+                        "SW\nControl",
+                        "SW\nInfested"
+                    )
+                )
+        )
+
+
+    p_heat <- ggplot(
+        heat,
+        aes(
+            x = Group,
+            y = y_pos,
+            fill = Isoform_Fraction
+        )
+    ) +
+
+        geom_tile(
+            width = 0.86,
+            height = 0.72
+        ) +
+
+        scale_fill_gradient(
+            low = "white",
+            high = "steelblue",
+            limits = c(
+                0,
+                1
+            ),
+            na.value = "grey95",
+            name = "Mean isoform\nfraction"
+        ) +
+
+        scale_y_continuous(
+            breaks =
+                dat$y_pos,
+            labels =
+                dat$Isoform_Label,
+            limits = c(
+                0.5,
+                nrow(dat) + 0.5
+            )
+        ) +
+
+        labs(
+            x = NULL,
+            y = NULL,
+            title = "Isoform usage"
+        ) +
+
+        guides(
+            fill =
+                guide_colorbar(
+                    title.position = "top",
+                    title.hjust = 0.5,
+                    barwidth = 8,
+                    barheight = 0.6
+                )
+        ) +
+
+        theme_bw() +
+
+        theme(
+
+            panel.grid =
+                element_blank(),
+
+            axis.text.x =
+                element_text(
+                    angle = 45,
+                    hjust = 1
+                ),
+
+            axis.text.y =
+                element_text(
+                    size = 8
+                ),
+
+            plot.title =
+                element_text(
+                    size = 10,
+                    face = "bold"
+                ),
+
+            legend.position =
+                "bottom",
+
+            legend.direction =
+                "horizontal",
+
+            legend.box =
+                "horizontal"
+        )
+
+
+    # ========================================================
+    # PANEL 2 — TRANSCRIPT STRUCTURE
+    # ========================================================
+
+    exon_dat <- exons %>%
+
+        filter(
+            Isoform_ID %in%
+                dat$Isoform_ID
+        ) %>%
+
+        inner_join(
+            y_lookup,
+            by = "Isoform_ID"
+        )
+
+
+    transcript_ranges <- exon_dat %>%
+
+        group_by(
+            Isoform_ID,
+            y_pos
+        ) %>%
+
+        summarise(
+            xmin = min(start),
+            xmax = max(end),
+            .groups = "drop"
+        )
+
+
+    p_rna <- ggplot() +
+
+        geom_segment(
+            data =
+                transcript_ranges,
+            aes(
+                x = xmin,
+                xend = xmax,
+                y = y_pos,
+                yend = y_pos
+            ),
+            linewidth = 0.5
+        ) +
+
+        geom_rect(
+            data =
+                exon_dat,
+            aes(
+                xmin = start,
+                xmax = end,
+                ymin = y_pos - 0.28,
+                ymax = y_pos + 0.28
+            )
+        ) +
+
+        scale_y_continuous(
+            breaks =
+                dat$y_pos,
+            labels =
+                rep(
+                    "",
+                    nrow(dat)
+                ),
+            limits = c(
+                0.5,
+                nrow(dat) + 0.5
+            )
+        ) +
+
+        labs(
+            x = "Genomic coordinate",
+            y = NULL,
+            title = "Transcript structure"
+        ) +
+
+        theme_bw() +
+
+        theme(
+
+            panel.grid =
+                element_blank(),
+
+            axis.text.y =
+                element_blank(),
+
+            axis.ticks.y =
+                element_blank(),
+
+            plot.title =
+                element_text(
+                    size = 10,
+                    face = "bold"
+                )
+        )
+
+
+    # ========================================================
+    # PANEL 3 — PREDICTED PROTEIN ARCHITECTURE
+    # ========================================================
+
+    protein_ranges <- dat %>%
+
+        filter(
+            !is.na(
+                Protein_ID
+            ),
+            Protein_ID != "",
+            !is.na(
+                Protein_Length_aa
+            )
+        ) %>%
+
+        dplyr::select(
+            Isoform_ID,
+            y_pos,
+            Protein_ID,
+            Protein_Group,
+            Protein_Length_aa,
+            N_Predicted_ORFs
+        ) %>%
+
+        distinct() %>%
+
+        mutate(
+
+            Protein_Group_Label =
+                ifelse(
+
+                    !is.na(
+                        N_Predicted_ORFs
+                    ) &
+                        N_Predicted_ORFs > 1,
+
+                    paste0(
+                        Protein_Group,
+                        " (ORFs=",
+                        N_Predicted_ORFs,
+                        ")"
+                    ),
+
+                    Protein_Group
+                )
+        )
+
+
+    pfam_gene <- protein_ranges %>%
+
+        inner_join(
+            pfam,
+            by = "Protein_ID"
+        )
+
+
+    if (nrow(protein_ranges) > 0) {
+
+        max_protein <- max(
+            protein_ranges$Protein_Length_aa,
+            na.rm = TRUE
+        )
+
+    } else {
+
+        max_protein <- 1
+    }
+
+
+    p_protein <- ggplot() +
+
+        # protein backbone
+        geom_segment(
+            data =
+                protein_ranges,
+            aes(
+                x = 1,
+                xend =
+                    Protein_Length_aa,
+                y =
+                    y_pos,
+                yend =
+                    y_pos
+            ),
+            linewidth = 1
+        ) +
+
+        # Pfam domains
+        geom_rect(
+            data =
+                pfam_gene,
+            aes(
+                xmin =
+                    Domain_Start,
+                xmax =
+                    Domain_End,
+                ymin =
+                    y_pos - 0.25,
+                ymax =
+                    y_pos + 0.25,
+                fill =
+                    Domain_Label
+            )
+        ) +
+
+        # Protein Group labels
+        geom_text(
+            data =
+                protein_ranges,
+            aes(
+                x =
+                    Protein_Length_aa +
+                    max_protein * 0.025,
+                y =
+                    y_pos,
+                label =
+                    Protein_Group_Label
+            ),
+            hjust = 0,
+            size = 3
+        ) +
+
+        scale_y_continuous(
+            breaks =
+                dat$y_pos,
+            labels =
+                rep(
+                    "",
+                    nrow(dat)
+                ),
+            limits = c(
+                0.5,
+                nrow(dat) + 0.5
+            )
+        ) +
+
+        coord_cartesian(
+            xlim = c(
+                0,
+                max_protein * 1.30
+            ),
+            clip = "off"
+        ) +
+
+        labs(
+            x = "Protein position (aa)",
+            y = NULL,
+            fill = "Pfam domain",
+            title = "Predicted protein architecture"
+        ) +
+
+        guides(
+            fill =
+                guide_legend(
+                    nrow = 2,
+                    byrow = TRUE,
+                    title.position = "top"
+                )
+        ) +
+
+        theme_bw() +
+
+        theme(
+
+            panel.grid =
+                element_blank(),
+
+            axis.text.y =
+                element_blank(),
+
+            axis.ticks.y =
+                element_blank(),
+
+            plot.title =
+                element_text(
+                    size = 10,
+                    face = "bold"
+                ),
+
+            legend.position =
+                "bottom",
+
+            legend.direction =
+                "horizontal",
+
+            legend.box =
+                "horizontal",
+
+            legend.text =
+                element_text(
+                    size = 8
+                ),
+
+            legend.title =
+                element_text(
+                    size = 9
+                ),
+
+            plot.margin =
+                margin(
+                    5,
+                    10,
+                    5,
+                    5
+                )
+        )
+
+
+    # ========================================================
+    # PANEL 4 — PROTEIN GROUP ΔIF
+    #
+    # Same calculation as before: summed isoform fraction for transcripts encoding identical predicted proteins
+    # ΔIF = Infested - Control; calculated separately for each genotype (101-14, 3309, SW)
+    # ========================================================
+
+    delta_base <- dat %>%
+
+        filter(
+            !is.na(
+                Protein_Group
+            ),
+            Protein_Group != ""
+        ) %>%
+
+        group_by(
+            Protein_Group
+        ) %>%
+
+        summarise(
+
+            `101-14_Control` =
+                sum(
+                    `101-14_Control`,
+                    na.rm = TRUE
+                ),
+
+            `101-14_Infested` =
+                sum(
+                    `101-14_Infested`,
+                    na.rm = TRUE
+                ),
+
+            `3309_Control` =
+                sum(
+                    `3309_Control`,
+                    na.rm = TRUE
+                ),
+
+            `3309_Infested` =
+                sum(
+                    `3309_Infested`,
+                    na.rm = TRUE
+                ),
+
+            SW_Control =
+                sum(
+                    SW_Control,
+                    na.rm = TRUE
+                ),
+
+            SW_Infested =
+                sum(
+                    SW_Infested,
+                    na.rm = TRUE
+                ),
+
+            .groups = "drop"
+        ) %>%
+
+        mutate(
+
+            `101-14` =
+                `101-14_Infested` -
+                `101-14_Control`,
+
+            `3309` =
+                `3309_Infested` -
+                `3309_Control`,
+
+            SW =
+                SW_Infested -
+                SW_Control,
+
+            Protein_Group_Order =
+                protein_group_order(
+                    Protein_Group
+                )
+        ) %>%
+
+        arrange(
+            Protein_Group_Order
+        )
+
+
+    delta_dat <- delta_base %>%
+
+        dplyr::select(
+            Protein_Group,
+            `101-14`,
+            `3309`,
+            SW
+        ) %>%
+
+        pivot_longer(
+
+            cols = c(
+                `101-14`,
+                `3309`,
+                SW
+            ),
+
+            names_to =
+                "Genotype",
+
+            values_to =
+                "Delta_IF"
+        )
+
+
+    delta_dat$Protein_Group <- factor(
+        delta_dat$Protein_Group,
+        levels =
+            unique(
+                delta_base$Protein_Group
+            )
+    )
+
+
+    delta_dat$Genotype <- factor(
+        delta_dat$Genotype,
+        levels = c(
+            "101-14",
+            "3309",
+            "SW"
+        )
+    )
+
+
+    delta_max <- max(
+        abs(
+            delta_dat$Delta_IF
+        ),
+        na.rm = TRUE
+    )
+
+
+    if (
+        !is.finite(
+            delta_max
+        ) ||
+            delta_max == 0
+    ) {
+
+        delta_max <- 0.05
+    }
+
+
+    delta_limit <-
+        delta_max * 1.15
+
+
+    p_delta <- ggplot(
+        delta_dat,
+        aes(
+            x = Protein_Group,
+            y = Delta_IF,
+            fill = Genotype
+        )
+    ) +
+
+        geom_hline(
+            yintercept = 0,
+            linetype = "dashed",
+            linewidth = 0.45
+        ) +
+
+        geom_col(
+            position =
+                position_dodge(
+                    width = 0.8
+                ),
+            width = 0.72
+        ) +
+
+        coord_cartesian(
+            ylim = c(
+                -delta_limit,
+                delta_limit
+            )
+        ) +
+
+        labs(
+            x =
+                "Predicted protein group",
+            y =
+                "Change in summed isoform fraction\n(Infested − Control)",
+            title =
+                "Predicted protein-group change",
+            fill =
+                "Genotype"
+        ) +
+
+        guides(
+            fill =
+                guide_legend(
+                    nrow = 1,
+                    title.position = "top"
+                )
+        ) +
+
+        theme_bw() +
+
+        theme(
+
+            panel.grid =
+                element_blank(),
+
+            axis.text.x =
+                element_text(
+                    angle = 45,
+                    hjust = 1,
+                    vjust = 1,
+                    size = 8
+                ),
+
+            axis.text.y =
+                element_text(
+                    size = 8
+                ),
+
+            axis.title.x =
+                element_text(
+                    size = 9
+                ),
+
+            axis.title.y =
+                element_text(
+                    size = 9
+                ),
+
+            plot.title =
+                element_text(
+                    size = 10,
+                    face = "bold"
+                ),
+
+            legend.position =
+                "bottom",
+
+            legend.direction =
+                "horizontal",
+
+            legend.box =
+                "horizontal"
+        )
+
+
+    # ========================================================
+    # SAVE DISPLAYED ISOFORM TABLE
+    # ========================================================
+
+    displayed_isoforms <- dat %>%
+
+        dplyr::select(
+            Gene_ID,
+            Candidate,
+            Isoform_ID,
+            Significant_Any_Contrast,
+            N_Significant_Contrasts,
+            Significant_Contrasts,
+            PRGminer_Class,
+            `101-14_Control`,
+            `101-14_Infested`,
+            `3309_Control`,
+            `3309_Infested`,
+            SW_Control,
+            SW_Infested,
+            Max_Mean_IF,
+            Protein_ID,
+            Protein_Group,
+            Protein_Length_aa,
+            N_Predicted_ORFs
+        )
+
+
+    write.csv(
+        displayed_isoforms,
+        file.path(
+            PLOT_DIR,
+            paste0(
+                safe_name(
+                    gene_id
+                ),
+                "_displayed_isoforms_IFge0.10.csv"
+            )
+        ),
+        row.names = FALSE
+    )
+
+
+    # ========================================================
+    # COMBINE
+    # ========================================================
+
+    n_iso <- nrow(
+        dat
+    )
+
+
+    fig_height <- max(
+        5,
+        1.8 +
+            n_iso * 0.55
+    )
+
+
+    title_text <- paste0(
+        candidate_name,
+        "\n",
+        gene_id
+    )
+
+
+    combined <- (
+
+        p_heat |
+
+            p_rna |
+
+            p_protein |
+
+            p_delta
+
+    ) +
+
+        plot_layout(
+
+            widths = c(
+                1.55,
+                2.6,
+                3.2,
+                2.4
+            )
+        ) +
+
+        plot_annotation(
+
+            title =
+                title_text,
+
+            subtitle =
+                paste0(
+                    "* significant in ≥1 of the 9 final DIU contrasts; ",
+                    "only isoforms reaching mean IF ≥ ",
+                    MIN_PLOT_IF,
+                    " in ≥1 genotype × treatment group are shown; ",
+                    "identical predicted amino-acid sequences share a Protein Group"
+                )
+        )
+
+
+    list(
+        plot = combined,
+        height = fig_height,
+        delta = delta_dat,
+        displayed_isoforms = displayed_isoforms
+    )
+}
+
+
+# ============================================================
+# 12. TARGET GENES
+# ============================================================
+
+target_genes <- unique(
+    master$Gene_ID
+)
+
+
+# ============================================================
+# 13. GENERATE INDIVIDUAL FIGURES
+# ============================================================
+
+plot_objects <- list()
+
+
+for (gene in target_genes) {
+
+    cat(
+        "Plotting:",
+        gene,
+        "\n"
+    )
+
+
+    result <- make_candidate_plot(
+        gene
+    )
+
+
+    if (is.null(result)) {
+
+        next
+    }
+
+
+    plot_objects[[gene]] <-
+        result$plot
+
+
+    safe_gene <- safe_name(
+        gene
+    )
+
+
+    ggsave(
+
+        filename = file.path(
+            PLOT_DIR,
+            paste0(
+                safe_gene,
+                "_crossgenotype_functional_isoforms_with_delta.pdf"
+            )
+        ),
+
+        plot =
+            result$plot,
+
+        width =
+            21,
+
+        height =
+            result$height
+    )
+
+
+    ggsave(
+
+        filename = file.path(
+            PLOT_DIR,
+            paste0(
+                safe_gene,
+                "_crossgenotype_functional_isoforms_with_delta.png"
+            )
+        ),
+
+        plot =
+            result$plot,
+
+        width =
+            21,
+
+        height =
+            result$height,
+
+        dpi =
+            300
+    )
+
+
+    write.csv(
+
+        result$delta,
+
+        file.path(
+            PLOT_DIR,
+            paste0(
+                safe_gene,
+                "_protein_group_delta_values.csv"
+            )
+        ),
+
+        row.names = FALSE
+    )
+}
+
+
+# ============================================================
+# 14. COMBINED MULTI-PAGE PDF
+# ============================================================
+
+MULTI_PDF <- file.path(
+    PLOT_DIR,
+    "All_Target_Genes_CrossGenotype_Functional_Isoform_Plots_With_Delta.pdf"
+)
+
+
+pdf(
+    MULTI_PDF,
+    width = 21,
+    height = 10
+)
+
+
+for (gene in names(plot_objects)) {
+
+    print(
+        plot_objects[[gene]]
+    )
+}
+
+
+dev.off()
+
+
+# ============================================================
+# 15. SAVE PROTEIN GROUP SUMMARY
+# ============================================================
+
+protein_group_summary <- master %>%
+
+    dplyr::select(
+        Gene_ID,
+        Candidate,
+        Isoform_ID,
+        Protein_ID,
+        Protein_Group,
+        Protein_Length_aa,
+        N_Predicted_ORFs
+    ) %>%
+
+    distinct() %>%
+
+    arrange(
+        Gene_ID,
+        Protein_Group,
+        Isoform_ID
+    )
+
+
+write.csv(
+    protein_group_summary,
+    file.path(
+        PLOT_DIR,
+        "Target_Genes_Protein_Group_Summary.csv"
+    ),
+    row.names = FALSE
+)
+
+
+# ============================================================
+# 16. SAVE DISPLAY FILTER SUMMARY
+# ============================================================
+
+display_filter_summary <- master %>%
+
+    distinct(
+        Gene_ID,
+        Candidate,
+        Isoform_ID,
+        .keep_all = TRUE
+    ) %>%
+
+    rowwise() %>%
+
+    mutate(
+
+        Max_Mean_IF =
+            max(
+                c(
+                    `101-14_Control`,
+                    `101-14_Infested`,
+                    `3309_Control`,
+                    `3309_Infested`,
+                    SW_Control,
+                    SW_Infested
+                ),
+                na.rm = TRUE
+            ),
+
+        Displayed =
+            is.finite(
+                Max_Mean_IF
+            ) &
+            Max_Mean_IF >=
+                MIN_PLOT_IF
+    ) %>%
+
+    ungroup() %>%
+
+    dplyr::select(
+        Gene_ID,
+        Candidate,
+        Isoform_ID,
+        `101-14_Control`,
+        `101-14_Infested`,
+        `3309_Control`,
+        `3309_Infested`,
+        SW_Control,
+        SW_Infested,
+        Max_Mean_IF,
+        Displayed,
+        Significant_Any_Contrast,
+        N_Significant_Contrasts,
+        Significant_Contrasts
+    ) %>%
+
+    arrange(
+        Gene_ID,
+        desc(
+            Displayed
+        ),
+        desc(
+            Max_Mean_IF
+        )
+    )
+
+
+write.csv(
+    display_filter_summary,
+    file.path(
+        PLOT_DIR,
+        "Target_Genes_Isoform_Display_Filter_Summary.csv"
+    ),
+    row.names = FALSE
+)
+
+
+# ============================================================
+# 17. FINISH
+# ============================================================
+
+cat("\n")
+cat("====================================================\n")
+cat("CROSS-GENOTYPE FOUR-PANEL PLOTS COMPLETE\n")
+cat("====================================================\n")
+
+
+cat(
+    "\nPlotting threshold:",
+    MIN_PLOT_IF,
+    "\n"
+)
+
+
+cat(
+    "\nGenes plotted:",
+    length(
+        plot_objects
+    ),
+    "\n"
+)
+
+
+cat(
+    "\nCombined PDF:\n",
+    MULTI_PDF,
+    "\n"
+)
+
+
+cat(
+    "\nIndividual figures:\n",
+    PLOT_DIR,
+    "\n"
+)
+
+
+cat(
+    "\nFull Pfam / InterPro annotations:\n",
+    file.path(
+        PLOT_DIR,
+        "Target_Genes_Full_Pfam_InterPro_Annotations.csv"
+    ),
+    "\n"
+)
+
+
+cat(
+    "\nDomain label map:\n",
+    file.path(
+        PLOT_DIR,
+        "Target_Genes_Domain_Label_Map.csv"
+    ),
+    "\n"
+)
+
+
+cat(
+    "\nIsoform display-filter summary:\n",
+    file.path(
+        PLOT_DIR,
+        "Target_Genes_Isoform_Display_Filter_Summary.csv"
+    ),
+    "\n"
+)
+
+
+
