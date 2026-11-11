@@ -1,4 +1,4 @@
-# Pepare gene expression matrix for WGCNA anaylsis
+### Pepare gene expression matrix for WGCNA anaylsis
 
 library(tidyverse)
 
@@ -398,7 +398,14 @@ cat("============================================================\n")
 
 # results 
 
-101-14 : 6 samples 3309 : 5 samples sw : 6 samples Unique isoform IDs across all three matrices: 1674716  Combined isoform matrix: 1674716 isoforms x 17 samples Unique SQANTI-retained genes: 58147  Oarfish isoforms also retained by SQANTI: 897880  Genes before filtering: 58147  >  > cat( +   "FPM > 0.1 in >=2 samples:", +   sum(keep_01_2), +   "\n" + ) FPM > 0.1 in >=2 samples: 44996  >  > cat( +   "FPM > 0.1 in >=3 samples:", +   sum(keep_01_3), +   "\n" + ) FPM > 0.1 in >=3 samples: 43025  >  > cat( +   "FPM > 0.5 in >=2 samples:", +   sum(keep_05_2), +   "\n" + ) FPM > 0.5 in >=2 samples: 36543 
+# Unique isoform IDs across all three matrices: 1674716  
+# Combined isoform matrix: 1674716 isoforms x 17 samples 
+# Unique SQANTI-retained genes: 58147  
+# Oarfish isoforms also retained by SQANTI: 897880 
+# Genes before filtering: 58147  
+# FPM > 0.1 in >=2 samples: 44996  
+# FPM > 0.1 in >=3 samples: 43025
+# FPM > 0.5 in >=2 samples: 36543 
 
 
 
@@ -414,7 +421,7 @@ cat("============================================================\n")
 
 
 
-### construct signed newtwork using blockwise , but in single block (reduce memory usage)
+### Construct signed newtwork using blockwise , but in single block (reduce memory usage)
 
 
 #!/usr/bin/env Rscript
@@ -714,13 +721,6 @@ cat(
 
 # ============================================================
 # 7. DESeq2 VST
-#
-# Oarfish values are fractional.
-# DESeq2 requires integer input, so round after gene-level
-# summation.
-#
-# design = ~1 because this transformation is for an
-# unsupervised co-expression network.
 # ============================================================
 
 gene_counts_integer <- round(
@@ -769,10 +769,7 @@ cat(
 
 
 # ============================================================
-# 8. WGCNA orientation
-#
-# rows = samples
-# columns = genes
+# 8. WGCNA orientation (rows = samples; columns = genes)
 # ============================================================
 
 datExpr <- t(
@@ -886,9 +883,7 @@ save(
 
 # ============================================================
 # SIGNED WGCNA WORKFLOW
-# Vrip_X_Vrup: 101-14 + 3309 + sw
-# Gene-level network
-# Signed network, soft power = 16
+# Vrip_X_Vrup: 101-14 + 3309 + sw; gene-level network (isoforms collapsed); signed network, soft power = 16
 # ============================================================
 
 library(WGCNA)
@@ -1599,56 +1594,6 @@ save(
 )
 
 
-# ============================================================
-# 27. Final summary
-# ============================================================
-
-cat("\n============================================================\n")
-cat("SIGNED WGCNA WORKFLOW COMPLETE\n")
-cat("============================================================\n")
-
-cat(
-  "Samples:",
-  nrow(input_mat),
-  "\n"
-)
-
-cat(
-  "Genes:",
-  ncol(input_mat),
-  "\n"
-)
-
-cat(
-  "Soft power:",
-  softPower,
-  "\n"
-)
-
-cat(
-  "Modules excluding grey:",
-  length(
-    setdiff(
-      unique(dynamicColors),
-      "grey"
-    )
-  ),
-  "\n"
-)
-
-cat(
-  "Grey genes:",
-  sum(dynamicColors == "grey"),
-  "\n"
-)
-
-cat(
-  "Output directory:",
-  OUT_DIR,
-  "\n"
-)
-
-
 
 
 
@@ -1701,7 +1646,10 @@ cat("Saved:\n", OUT_FILE, "\n")
 
 
 
+
+
 ### Perform linear regression analysis
+### For which modules is expression variation explained by genotype, treatment, or genotype-by-treatment interaction
 
 # ============================================================
 # SIGNED WGCNA: MODULE EIGENGENE REGRESSION 
@@ -4671,8 +4619,3 @@ write.table(
   row.names = FALSE
 )
 
-
-
-
-
-###
